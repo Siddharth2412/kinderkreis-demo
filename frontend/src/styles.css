@@ -40,7 +40,7 @@ nav{
   border-bottom: 1px solid var(--line);
 }
 nav .wrap{ display:flex; align-items:center; justify-content:space-between; height: 72px; }
-.logo{ display:flex; align-items:center; gap:10px; font-family:'Fraunces', serif; font-weight:600; font-size:1.3rem; color: var(--forest-dark); }
+.logo{ display:flex; align-items:center; gap:10px; font-family:'Fraunces', serif; font-weight:600; font-size:1.3rem; color: var(--forest-dark); border:none; background:none; padding:0; cursor:pointer; }
 .logo-mark{ width: 30px; height:30px; border-radius:50%; background: conic-gradient(from 210deg, var(--forest), var(--honey), var(--forest)); display:inline-block; }
 .nav-links{ display:flex; gap:8px; }
 .nav-btn{
@@ -178,3 +178,41 @@ footer{ padding: 40px 0; border-top:1px solid var(--line); text-align:center; co
 .contact-item{ display:flex; align-items:center; gap:8px; font-size:0.9rem; color:var(--forest); text-decoration:none; }
 .contact-item:hover{ text-decoration:underline; }
 .contact-icon{ font-size:1rem; }
+
+/* Booking request form (inside the provider modal) */
+.booking-hint{ background: var(--bg); border:1px dashed var(--line); border-radius:10px; padding:16px; font-size:0.9rem; color:var(--sage); display:flex; flex-direction:column; gap:12px; align-items:flex-start; }
+.booking-form .form-grid{ margin-bottom:0; }
+.booking-form .form-hint{ margin-top:0; margin-bottom:4px; }
+.hour-range{ flex-direction:row; gap:16px; }
+.hour-range .field{ flex:1; }
+.form-grid .field-error label{ color: var(--danger); }
+.form-grid .field-error input,
+.form-grid .field-error select{ border-color: var(--danger); background: #FBEAE4; }
+
+/* Booking lists ("Meine Anfragen" / "Buchungsanfragen") */
+.booking-list{ display:flex; flex-direction:column; gap:14px; }
+.booking-card{ background: var(--paper); border:1px solid var(--line); border-radius: var(--radius); padding:20px; }
+.booking-card-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
+.booking-card .modal-bio{ font-size:0.9rem; margin:6px 0 0; }
+.booking-meta{ font-size:0.82rem; color:var(--sage); margin:4px 0 0; }
+.booking-card .form-actions{ margin-top:14px; }
+
+/* Notification bell */
+.notif-wrap{ position:relative; }
+.notif-bell{ position:relative; border:none; background:transparent; font-size:1.15rem; line-height:1; cursor:pointer; padding:8px; border-radius:50%; }
+.notif-bell:hover{ background: var(--bg); }
+.notif-badge{ position:absolute; top:2px; right:2px; background: var(--danger); color:#fff; font-size:0.65rem; font-weight:700; min-width:16px; height:16px; border-radius:999px; display:flex; align-items:center; justify-content:center; padding:0 3px; }
+.notif-dropdown{ position:absolute; top:calc(100% + 8px); right:0; width:320px; max-height:400px; overflow-y:auto; background: var(--paper); border:1px solid var(--line); border-radius: var(--radius); box-shadow: 0 12px 28px rgba(20,42,29,0.14); z-index:60; }
+.notif-dropdown-head{ display:flex; align-items:center; justify-content:space-between; gap:8px; padding:14px 16px; border-bottom:1px solid var(--line); font-weight:600; font-size:0.88rem; color:var(--forest-dark); }
+.notif-dropdown-head .link-btn{ font-size:0.78rem; font-weight:600; }
+.notif-empty{ padding:20px 16px; color:var(--sage); font-size:0.88rem; margin:0; }
+.notif-item{ display:flex; align-items:flex-start; gap:8px; width:100%; text-align:left; border:none; background:none; padding:12px 16px; cursor:pointer; border-bottom:1px solid var(--line); }
+.notif-item:last-child{ border-bottom:none; }
+.notif-item:hover{ background: var(--bg); }
+.notif-item.unread .notif-item-title{ font-weight:700; }
+.notif-dot{ width:7px; height:7px; border-radius:50%; background: var(--honey-deep); margin-top:6px; flex-shrink:0; }
+.notif-dot.read{ visibility:hidden; }
+.notif-item-body{ display:flex; flex-direction:column; gap:2px; }
+.notif-item-title{ font-size:0.86rem; font-weight:600; color:var(--forest-dark); }
+.notif-item-text{ font-size:0.82rem; color:var(--sage); }
+.notif-item-time{ font-size:0.74rem; color:var(--sage-light); margin-top:2px; }

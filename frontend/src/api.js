@@ -1,9 +1,13 @@
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
+function authHeaders(token) {
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function request(path, options = {}) {
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -31,8 +35,24 @@ export const fetchProvider = (id) => request(`/api/providers/${id}`);
 
 export const fetchCities = () => request("/api/meta/cities");
 
-export const registerProvider = (payload) =>
-  request("/api/providers", { method: "POST", body: JSON.stringify(payload) });
+// Tagespflegeperson's own profile — requires an authenticated session, mapped
+// to their account by email on the backend. Not part of the public directory.
+export const fetchMyProvider = (token) =>
+  request("/api/providers/me", { headers: authHeaders(token) });
+
+export const createMyProvider = (token, payload) =>
+  request("/api/providers/me", {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+
+export const updateMyProvider = (token, payload) =>
+  request("/api/providers/me", {
+    method: "PUT",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
 
 export const loginUser = (email, password) =>
   request("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
@@ -54,3 +74,33 @@ export const forgotPassword = (email) =>
 
 export const resetPassword = (email, otp, new_password) =>
   request("/api/auth/reset-password", { method: "POST", body: JSON.stringify({ email, otp, new_password }) });
+
+// Bookings — Eltern request care from an account-linked provider, the owning
+// Tagespflegeperson confirms/declines.
+export const createBooking = (token, payload) =>
+  request("/api/bookings", { method: "POST", headers: authHeaders(token), body: JSON.stringify(payload) });
+
+export const fetchMyBookings = (token) =>
+  request("/api/bookings/mine", { headers: authHeaders(token) });
+
+export const cancelBooking = (token, id) =>
+  request(`/api/bookings/${id}/cancel`, { method: "POST", headers: authHeaders(token) });
+
+export const fetchProviderBookings = (token) =>
+  request("/api/bookings/provider", { headers: authHeaders(token) });
+
+export const confirmBooking = (token, id) =>
+  request(`/api/bookings/${id}/confirm`, { method: "POST", headers: authHeaders(token) });
+
+export const declineBooking = (token, id) =>
+  request(`/api/bookings/${id}/decline`, { method: "POST", headers: authHeaders(token) });
+
+// Notifications — in-app only, shared by both roles.
+export const fetchNotifications = (token) =>
+  request("/api/notifications", { headers: authHeaders(token) });
+
+export const markNotificationRead = (token, id) =>
+  request(`/api/notifications/${id}/read`, { method: "POST", headers: authHeaders(token) });
+
+export const markAllNotificationsRead = (token) =>
+  request("/api/notifications/read-all", { method: "POST", headers: authHeaders(token) });

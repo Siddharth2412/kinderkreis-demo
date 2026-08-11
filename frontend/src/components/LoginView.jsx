@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { loginUser } from "../api.js";
 
-export default function LoginView({ onLogin, onGoToSignup, onGoToForgot }) {
+export default function LoginView({ onLogin, onNeedsVerification, onGoToSignup, onGoToForgot }) {
   const [form, setForm] = useState({ email: "", password: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -15,8 +15,14 @@ export default function LoginView({ onLogin, onGoToSignup, onGoToForgot }) {
     setError("");
     setLoading(true);
     try {
-      const user = await loginUser(form.email, form.password);
-      onLogin(user);
+      const result = await loginUser(form.email, form.password);
+      if (result.needs_verification) {
+        // Correct credentials, but the account was never confirmed — a fresh
+        // code was just sent, so continue straight into that flow.
+        onNeedsVerification(result.email);
+      } else {
+        onLogin(result);
+      }
     } catch (err) {
       setError(err.message);
     } finally {

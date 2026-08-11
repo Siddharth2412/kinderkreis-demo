@@ -12,7 +12,7 @@ const AGE_OPTIONS = [
   { label: "5–14 Jahre", value: 84 },
 ];
 
-export default function ParentsView() {
+export default function ParentsView({ auth, onGoToLogin }) {
   const [cities, setCities] = useState([]);
   const [filters, setFilters] = useState({
     city: "",
@@ -129,7 +129,12 @@ export default function ParentsView() {
         </div>
       )}
 
-      <ProviderDetailModal provider={selected} onClose={() => setSelected(null)} />
+      <ProviderDetailModal
+        provider={selected}
+        auth={auth}
+        onClose={() => setSelected(null)}
+        onGoToLogin={onGoToLogin}
+      />
     </div>
   );
 }

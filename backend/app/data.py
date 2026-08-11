@@ -77,12 +77,3 @@ SEED_PROVIDERS: list[Provider] = [
         bio="Aktuell in der tätigkeitsbegleitenden Qualifizierung, Pflegeerlaubnis beantragt.",
     ),
 ]
-
-_next_id = max(p.id for p in SEED_PROVIDERS) + 1
-
-
-def get_next_id() -> int:
-    global _next_id
-    value = _next_id
-    _next_id += 1
-    return value

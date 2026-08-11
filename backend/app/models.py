@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from enum import Enum
 from typing import Optional
 
@@ -67,6 +68,9 @@ class ProviderCreate(ProviderBase):
 
 class Provider(ProviderBase):
     id: int
+    # Email of the Tagespflegeperson account that owns this listing, if any
+    # (seed/legacy profiles have no owner). Never exposed in the public API.
+    owner_email: Optional[str] = None
 
     @property
     def is_certified(self) -> bool:
@@ -78,7 +82,57 @@ class Provider(ProviderBase):
         return self.capacity_total - self.capacity_used
 
     def to_public_dict(self) -> dict:
-        data = self.model_dump()
+        data = self.model_dump(exclude={"owner_email"})
         data["is_certified"] = self.is_certified
         data["free_places"] = self.free_places
+        # Never exposes owner_email itself, but the UI needs to know whether a
+        # booking request is even possible (only account-linked profiles have
+        # someone able to confirm one).
+        data["is_bookable"] = self.owner_email is not None
         return data
+
+
+class BookingStatus(str, Enum):
+    pending = "pending"
+    confirmed = "confirmed"
+    declined = "declined"
+    cancelled = "cancelled"
+
+
+class BookingCreate(BaseModel):
+    provider_id: int
+    child_name: str = Field(..., min_length=1, max_length=80)
+    child_age_months: Optional[int] = Field(None, ge=0, le=216)
+    start_date: str = Field(..., description="Requested start date, ISO format YYYY-MM-DD")
+    start_hour: int = Field(..., ge=0, le=23, description="Care start time, 0-23")
+    end_hour: int = Field(..., ge=0, le=23, description="Care end time, 0-23")
+    parent_address: str = Field(..., min_length=3, max_length=200)
+    parent_phone: str = Field(..., min_length=5, max_length=30)
+    message: Optional[str] = Field(None, max_length=500)
+
+    @field_validator("start_date")
+    @classmethod
+    def valid_iso_date(cls, v: str) -> str:
+        # Format only — Booking subclasses this to redisplay stored rows, whose
+        # start_date is often in the past by the time they're read back, so the
+        # "not in the past" business rule lives at creation time (see main.py)
+        # rather than here.
+        try:
+            date.fromisoformat(v)
+        except ValueError as exc:
+            raise ValueError("start_date must be an ISO date (YYYY-MM-DD)") from exc
+        return v
+
+
+class Booking(BookingCreate):
+    id: int
+    parent_email: str
+    status: BookingStatus
+    created_at: str
+    updated_at: str
+    # Display-only fields filled in by the API layer depending on who's
+    # looking: the parent sees the provider's name/city, the provider sees
+    # the parent's name. Never persisted on the row itself.
+    provider_name: Optional[str] = None
+    provider_city: Optional[str] = None
+    parent_name: Optional[str] = None

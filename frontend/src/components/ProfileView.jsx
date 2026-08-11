@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { registerProvider } from "../api.js";
+import { useEffect, useState } from "react";
+import { fetchMyProvider, createMyProvider, updateMyProvider } from "../api.js";
 
 const INITIAL = {
   name: "",
@@ -21,11 +21,38 @@ const INITIAL = {
 
 const MAX_CAPACITY = { individual: 5, group: 10 };
 
-export default function RegisterView({ onRegistered }) {
+// Own profile page for a logged-in Tagespflegeperson: shows their current
+// listing (prefilled into the form) if one exists, and lets them create or
+// change it. Mapped to their account via the session token — never shown on
+// the public "Für Eltern" directory.
+export default function ProfileView({ token }) {
   const [form, setForm] = useState(INITIAL);
+  const [mode, setMode] = useState(null); // "create" | "edit"
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchMyProvider(token)
+      .then(({ provider }) => {
+        if (cancelled) return;
+        if (provider) {
+          const { is_certified, free_places, id, ...editable } = provider;
+          setForm(editable);
+          setMode("edit");
+        } else {
+          setMode("create");
+        }
+      })
+      .catch((err) => !cancelled && setError(err.message))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   const update = (key, value) => {
     setForm((f) => {
@@ -64,10 +91,16 @@ export default function RegisterView({ onRegistered }) {
         qualification_hours: Number(form.qualification_hours),
         practicum_hours: Number(form.practicum_hours),
       };
-      const created = await registerProvider(payload);
-      setSuccess(`Profil für „${created.name}" wurde angelegt${created.is_certified ? " und als zertifiziert markiert" : ""}.`);
-      setForm(INITIAL);
-      onRegistered?.(created);
+      const saved =
+        mode === "edit" ? await updateMyProvider(token, payload) : await createMyProvider(token, payload);
+      const { is_certified, free_places, id, ...editable } = saved;
+      setForm(editable);
+      setMode("edit");
+      setSuccess(
+        mode === "edit"
+          ? "Ihre Änderungen wurden gespeichert."
+          : `Profil für „${saved.name}" wurde angelegt${saved.is_certified ? " und als zertifiziert markiert" : ""}.`
+      );
     } catch (err) {
       setError(err.message);
     } finally {
@@ -77,12 +110,26 @@ export default function RegisterView({ onRegistered }) {
 
   const capMax = MAX_CAPACITY[form.care_type];
 
+  if (loading) {
+    return (
+      <div className="section-head">
+        <span className="eyebrow">Für Tagespflegepersonen</span>
+        <h1>Mein Profil</h1>
+        <p>Wird geladen …</p>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="section-head">
         <span className="eyebrow">Für Tagespflegepersonen</span>
-        <h1>Profil anlegen</h1>
-        <p>Zeigen Sie Ihre Qualifikation, Pflegeerlaubnis und freien Plätze für suchende Eltern.</p>
+        <h1>Mein Profil</h1>
+        <p>
+          {mode === "edit"
+            ? "So sehen Eltern Ihr Profil. Ändern Sie Angaben und speichern Sie, um die Anzeige zu aktualisieren."
+            : "Zeigen Sie Ihre Qualifikation, Pflegeerlaubnis und freien Plätze für suchende Eltern."}
+        </p>
       </div>
 
       <div className="rules-note">
@@ -269,7 +316,7 @@ export default function RegisterView({ onRegistered }) {
 
         <div className="form-actions">
           <button className="btn-primary" type="submit" disabled={submitting}>
-            {submitting ? "Wird gespeichert …" : "Profil veröffentlichen"}
+            {submitting ? "Wird gespeichert …" : mode === "edit" ? "Änderungen speichern" : "Profil veröffentlichen"}
           </button>
         </div>
       </form>

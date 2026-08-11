@@ -1,11 +1,12 @@
 import { formatAge } from "../utils/format.js";
+import BookingRequestForm from "./BookingRequestForm.jsx";
 
 function freePlacesLabel(n) {
   if (n === 0) return "Aktuell keine freien Plätze.";
   return `${n} freie${n === 1 ? "r" : ""} Platz${n === 1 ? "" : "e"} verfügbar.`;
 }
 
-export default function ProviderDetailModal({ provider, onClose }) {
+export default function ProviderDetailModal({ provider, auth, onClose, onGoToLogin }) {
   if (!provider) return null;
 
   return (
@@ -81,10 +82,16 @@ export default function ProviderDetailModal({ provider, onClose }) {
           </div>
         )}
 
-        <div className="form-actions">
-          <button className="btn-primary" disabled={provider.free_places === 0}>
-            {provider.free_places > 0 ? "Kontakt aufnehmen" : "Auf Warteliste setzen"}
-          </button>
+        <div className="modal-section">
+          <h3>Buchungsanfrage</h3>
+          <BookingRequestForm
+            provider={provider}
+            auth={auth}
+            onGoToLogin={() => {
+              onClose();
+              onGoToLogin();
+            }}
+          />
         </div>
       </div>
     </div>
