@@ -306,17 +306,26 @@ One-time VM setup:
 2. Add these repo secrets under **Settings → Secrets and variables →
    Actions**: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
    `FROM_EMAIL`, `FROM_NAME`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`,
-   `ALLOWED_ORIGINS` (= `http://<VM_PUBLIC_IP>`), and `VITE_API_URL`
-   (= `http://<VM_PUBLIC_IP>:8000`) — see `.env.example` for what each does.
+   `ALLOWED_ORIGINS` (= `http://<VM_PUBLIC_IP>`) — see `.env.example` for
+   what each does.
 3. Push to `main` (or trigger the workflow manually from the Actions tab).
    The workflow writes `.env` from those secrets, builds both images,
    `docker compose -f docker-compose.prod.yml up -d`, and waits for both
    containers' health checks before finishing.
 
+Only port 80 needs to be reachable from the internet — the frontend's nginx
+reverse-proxies `/api/*` to the backend container over Docker's internal
+network (`frontend/nginx.conf`), so the backend is never exposed directly
+and there's no separate port to open on the VM or in any cloud-level
+security group in front of it. The browser calls the API as same-origin
+relative paths (`VITE_API_URL` is baked in empty on purpose — see
+`frontend/src/api.js`), so there's no CORS to configure either;
+`ALLOWED_ORIGINS` mainly matters if you ever call the backend from a
+different origin.
+
 No domain/HTTPS is set up by this path — the app is served plain HTTP on
-the VM's public IP (frontend on port 80, API on port 8000). Add a reverse
-proxy (Caddy or nginx) with Let's Encrypt once you have a domain to point
-at it.
+the VM's public IP. Add a reverse proxy (Caddy, or extend the existing
+nginx config) with Let's Encrypt once you have a domain to point at it.
 
 ## Next steps for a real product
 

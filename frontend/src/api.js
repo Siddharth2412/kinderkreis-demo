@@ -1,4 +1,8 @@
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+// `??`, not `||`: production (behind the nginx reverse proxy — see
+// nginx.conf's /api/ location) builds with VITE_API_URL="" on purpose, to
+// call the API as same-origin relative paths. `||` would treat that empty
+// string as "unset" and wrongly fall back to the localhost default below.
+const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 function authHeaders(token) {
   return token ? { Authorization: `Bearer ${token}` } : {};

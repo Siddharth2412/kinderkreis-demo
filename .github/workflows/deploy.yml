@@ -37,8 +37,6 @@ jobs:
           EOF
 
       - name: Build images
-        env:
-          VITE_API_URL: ${{ secrets.VITE_API_URL }}
         run: docker compose -f docker-compose.prod.yml build
 
       - name: Deploy

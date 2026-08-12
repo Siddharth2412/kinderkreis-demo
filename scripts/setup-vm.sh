@@ -8,10 +8,11 @@
 # What it does:
 #   1. Installs Docker Engine + the Compose plugin (docker compose v2).
 #   2. Adds the current user to the `docker` group.
-#   3. Opens only SSH (22) and HTTP (80) publicly via ufw; port 8000
-#      (the backend API) is also opened since the demo frontend calls it
-#      directly (see README "Deploying to production" / VITE_API_URL) —
-#      drop that rule later if you put a reverse proxy in front of it.
+#   3. Opens only SSH (22) and HTTP (80) publicly via ufw. The backend API
+#      is never exposed directly — nginx (the frontend container) reverse-
+#      proxies /api/ to it over the internal Docker network (see
+#      frontend/nginx.conf), so no separate port needs opening, here or in
+#      any cloud-level security group in front of this VM.
 #   4. Prints the next manual step: registering the GitHub Actions runner
 #      (requires a short-lived token from the GitHub UI, so it can't be
 #      scripted unattended).
@@ -41,7 +42,6 @@ sudo usermod -aG docker "$USER"
 echo "==> Configuring firewall (ufw)"
 sudo ufw allow OpenSSH
 sudo ufw allow 80/tcp
-sudo ufw allow 8000/tcp
 sudo ufw --force enable
 sudo ufw status verbose
 
@@ -71,8 +71,7 @@ This step needs a short-lived token from GitHub, so it isn't scripted here:
 
 Then add these repo secrets (Settings -> Secrets and variables -> Actions):
   SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, FROM_EMAIL, FROM_NAME,
-  ADMIN_USERNAME, ADMIN_PASSWORD, ALLOWED_ORIGINS (= http://<VM_PUBLIC_IP>),
-  VITE_API_URL (= http://<VM_PUBLIC_IP>:8000)
+  ADMIN_USERNAME, ADMIN_PASSWORD, ALLOWED_ORIGINS (= http://<VM_PUBLIC_IP>)
 
 Push to main (or run the workflow manually) and it will build + deploy.
 EOF

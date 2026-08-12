@@ -8,17 +8,18 @@
 #   docker compose -f docker-compose.prod.yml build
 #   docker compose -f docker-compose.prod.yml up -d
 #
-# Requires a `.env` file next to this one (see .env.example) and
-# VITE_API_URL to be set in the shell environment before `build` — Vite
-# bakes it into the JS bundle at build time, so docker-compose can only pass
-# it through as a build arg, not a runtime env var:
-#   export VITE_API_URL=http://<VM_PUBLIC_IP>:8000
+# Requires a `.env` file next to this one (see .env.example).
 services:
   backend:
     build: ./backend
     container_name: kinderkreis-backend
     ports:
-      - "8000:8000"
+      # Loopback-only: the backend is never reached directly from the
+      # internet — nginx (the frontend container) reverse-proxies /api/ to
+      # it over the internal Docker network (see frontend/nginx.conf). This
+      # binding just lets you `ssh -L 8000:localhost:8000` in for debugging
+      # (e.g. hitting /docs) without opening a port on the VM/cloud firewall.
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     mem_limit: 300m
@@ -35,7 +36,10 @@ services:
       context: ./frontend
       target: production
       args:
-        VITE_API_URL: ${VITE_API_URL}
+        # Empty on purpose: nginx proxies /api/ to the backend on the same
+        # origin (see frontend/nginx.conf), so the browser calls relative
+        # paths — no separate host:port to bake in, no CORS. See api.js.
+        VITE_API_URL: ""
     container_name: kinderkreis-frontend
     ports:
       - "80:5173"
