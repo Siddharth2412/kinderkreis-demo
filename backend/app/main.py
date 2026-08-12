@@ -35,9 +35,22 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# Comma-separated in ALLOWED_ORIGINS (e.g. "https://kinderkreis-demo.onrender.com")
+# to lock this down for a real deployment; defaults to wide open so the demo
+# keeps working with zero config. Auth here is a Bearer token the frontend
+# sets explicitly, never a cookie, so the browser never treats these as
+# "credentialed" requests — allow_credentials + a wildcard origin is safe in
+# this specific case (it would not be if anything relied on cookies).
+_allowed_origins_env = os.environ.get("ALLOWED_ORIGINS")
+allowed_origins = (
+    [origin.strip() for origin in _allowed_origins_env.split(",") if origin.strip()]
+    if _allowed_origins_env
+    else ["*"]
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # demo only — lock this down in production
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -145,7 +158,6 @@ def _issue_otp(purpose: str, email: str, subject: str, body_template: str, categ
     otp = _generate_otp()
     expires_at = (datetime.utcnow() + OTP_TTL).isoformat()
     db.set_otp(purpose, email, otp, expires_at)
-    print(f"[DEV] OTP for {purpose} → {email}: {otp} (expires at {expires_at})")
     _send_email(email, subject, body_template.format(otp=otp), category)
 
 

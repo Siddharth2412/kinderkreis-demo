@@ -31,8 +31,6 @@ export const fetchProviders = (filters = {}) => {
   return request(`/api/providers${q ? `?${q}` : ""}`);
 };
 
-export const fetchProvider = (id) => request(`/api/providers/${id}`);
-
 export const fetchCities = () => request("/api/meta/cities");
 
 // Tagespflegeperson's own profile — requires an authenticated session, mapped

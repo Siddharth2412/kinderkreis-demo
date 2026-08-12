@@ -14,11 +14,20 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional, TypedDict
 
-# Lives inside app/data/, which is bind-mounted by docker-compose (the whole
-# app/ dir is mounted), so the file survives container restarts. Override
-# with KINDERKREIS_DB_PATH for deployments (e.g. Render persistent disks).
+# Lives inside app/data/, which docker-compose bind-mounts on its own (see
+# the `backend.volumes` entry in docker-compose.yml), so the file survives
+# `docker compose up --build` redeploys, not just container restarts.
+# Override with KINDERKREIS_DB_PATH for other deployments (e.g. Render
+# persistent disks).
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "kinderkreis.db"
 DB_PATH = Path(os.environ.get("KINDERKREIS_DB_PATH", DEFAULT_DB_PATH))
+
+# How long a connection waits on a lock held by a concurrent writer before
+# giving up (SQLite serializes writers; FastAPI's sync `def` routes run
+# concurrently in a thread pool, so without this, one request writing —
+# e.g. confirming a booking — can make a simultaneous one fail with
+# "database is locked" instead of just waiting a moment).
+_BUSY_TIMEOUT_SECONDS = 5
 
 
 class UserRow(TypedDict):
@@ -37,8 +46,15 @@ class OtpRow(TypedDict):
 @contextmanager
 def _connect() -> Iterator[sqlite3.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=_BUSY_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
+    # WAL lets readers proceed while a write is in progress instead of
+    # blocking on the default rollback journal; busy_timeout covers the
+    # remaining writer-vs-writer case. Cheap to reassert on every connection
+    # — WAL is sticky in the file, but this stays correct even if the file
+    # is ever replaced by a copy that wasn't created with it set.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_SECONDS * 1000}")
     try:
         yield conn
         conn.commit()

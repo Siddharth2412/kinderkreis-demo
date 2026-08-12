@@ -105,7 +105,6 @@ main{ padding: 40px 0 90px; }
 .capacity-dots{ display:flex; gap:3px; }
 .capacity-dots span{ width:7px; height:7px; border-radius:50%; background: var(--line); }
 .capacity-dots span.filled{ background: var(--forest); }
-.age-range{ font-size:0.85rem; color:var(--sage); }
 .empty-state{ text-align:center; padding: 60px 20px; color:var(--sage); background:var(--paper); border:1px dashed var(--line); border-radius: var(--radius); }
 
 /* Modal */

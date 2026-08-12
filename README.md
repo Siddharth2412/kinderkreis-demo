@@ -35,6 +35,11 @@ docker compose up --build
 
 Stop with `Ctrl+C`, or `docker compose down` to remove the containers.
 
+This is the local-dev setup: live-reload source mounts and the Vite dev
+server on both services. See **Deploying to production** below for the
+lean, static-build alternative when you actually deploy somewhere
+resource-constrained.
+
 ## What you can do in the demo
 
 - **Startseite** (nav link + clicking the logo, always visible): returns to
@@ -131,7 +136,8 @@ kinderkreis-demo/
 │       └── data/
 │           └── kinderkreis.db  # created on first run, gitignored
 └── frontend/
-    ├── Dockerfile
+    ├── Dockerfile      # multi-stage: build the bundle, then serve it via nginx
+    ├── nginx.conf      # static-file serving config for the production image
     ├── package.json
     ├── vite.config.js
     ├── index.html
@@ -170,6 +176,45 @@ cd frontend
 npm install
 npm run dev
 ```
+
+## Deploying to production
+
+`docker-compose.yml` as-is is tuned for local dev (Vite dev server, live
+source mounts) — fine on a normal machine, too heavy on a small box (the
+Vite dev server alone is a few hundred MB of RAM). For a real deployment,
+build the frontend's `production` stage instead of relying on this file:
+
+```bash
+docker build --target production \
+  --build-arg VITE_API_URL=https://your-real-backend-url \
+  -t kinderkreis-frontend ./frontend
+```
+
+That serves the static build via `nginx:alpine` — a few MB of RAM instead
+of a few hundred — instead of running `npm run dev`. A few things to know:
+
+- **`VITE_API_URL` must be set at build time**, not after — Vite bakes
+  every `VITE_*` variable into the compiled JS when it builds, so changing
+  it means rebuilding the image, not just restarting the container.
+- **Lock down CORS** by setting `ALLOWED_ORIGINS` in `.env` to your real
+  frontend origin(s) (comma-separated) — it defaults to allowing any origin,
+  which is fine for a demo but not a real deployment.
+- **Sizing note**: 1 vCPU / 512MB RAM / 10GB SSD is comfortably enough for
+  this app *with* the nginx-served production build above — SQLite stays a
+  few MB, and the whole stack idles well under 300MB. It would not be with
+  the Vite dev server in the mix, which is why that swap matters more than
+  the RAM figure alone suggests.
+- **Email**: if your host blocks outbound SMTP (common on free tiers of
+  PaaS platforms like Render — see their own changelog on this) or a
+  personal Gmail account gets flagged for automated sending, switch
+  `_send_email` in `backend/app/main.py` to an HTTPS-API-based provider
+  instead of SMTP; the surrounding code (attachments, categories, dev-log
+  fallback) doesn't need to change, just the transport.
+
+If you're deploying for real (not just a one-off), it's worth asking for a
+small `docker-compose.prod.yml` at that point (production target + backend
+without the live-source mount + `mem_limit` guard rails) rather than typing
+the `docker build` command above by hand each time.
 
 ## Next steps for a real product
 
