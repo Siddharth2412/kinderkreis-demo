@@ -21,6 +21,9 @@ export default function ProviderDetailModal({ provider, auth, onClose, onGoToLog
         </div>
 
         <div className="badge-row">
+          {provider.certificate_verified && (
+            <span className="badge verified">✓ Zertifikat geprüft</span>
+          )}
           {provider.is_certified ? (
             <span className="badge">Zertifiziert (QHB)</span>
           ) : (

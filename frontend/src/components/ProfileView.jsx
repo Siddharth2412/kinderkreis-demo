@@ -44,6 +44,7 @@ export default function ProfileView({ token }) {
   const [submitting, setSubmitting] = useState(false);
 
   const [hasCertificate, setHasCertificate] = useState(false);
+  const [certificateVerified, setCertificateVerified] = useState(false);
   const [certBusy, setCertBusy] = useState(false);
   const [certError, setCertError] = useState(null);
   const [certSuccess, setCertSuccess] = useState(null);
@@ -56,10 +57,11 @@ export default function ProfileView({ token }) {
       .then(({ provider }) => {
         if (cancelled) return;
         if (provider) {
-          const { is_certified, free_places, id, has_certificate, ...editable } = provider;
+          const { is_certified, free_places, id, has_certificate, certificate_verified, ...editable } = provider;
           setForm(editable);
           setMode("edit");
           setHasCertificate(has_certificate);
+          setCertificateVerified(certificate_verified);
         } else {
           setMode("create");
         }
@@ -110,10 +112,11 @@ export default function ProfileView({ token }) {
       };
       const saved =
         mode === "edit" ? await updateMyProvider(token, payload) : await createMyProvider(token, payload);
-      const { is_certified, free_places, id, has_certificate, ...editable } = saved;
+      const { is_certified, free_places, id, has_certificate, certificate_verified, ...editable } = saved;
       setForm(editable);
       setMode("edit");
       setHasCertificate(has_certificate);
+      setCertificateVerified(certificate_verified);
       setSuccess(
         mode === "edit"
           ? "Ihre Änderungen wurden gespeichert."
@@ -146,7 +149,8 @@ export default function ProfileView({ token }) {
     try {
       const saved = await uploadMyCertificate(token, file);
       setHasCertificate(saved.has_certificate);
-      setCertSuccess("Zertifikat wurde hochgeladen.");
+      setCertificateVerified(saved.certificate_verified);
+      setCertSuccess("Zertifikat wurde hochgeladen. Ein Admin prüft es in Kürze.");
     } catch (err) {
       setCertError(err.message);
     } finally {
@@ -178,6 +182,7 @@ export default function ProfileView({ token }) {
     try {
       const saved = await deleteMyCertificate(token);
       setHasCertificate(saved.has_certificate);
+      setCertificateVerified(saved.certificate_verified);
       setCertSuccess("Zertifikat wurde entfernt.");
     } catch (err) {
       setCertError(err.message);
@@ -404,17 +409,20 @@ export default function ProfileView({ token }) {
           <h3>Qualifikationsnachweis</h3>
           <p className="form-hint certificate-hint">
             Laden Sie einen Nachweis Ihrer QHB-Qualifikation oder Pflegeerlaubnis hoch (PDF, JPG oder PNG, max. 5
-            MB). Die Datei ist nur für Sie sichtbar — Eltern sehen lediglich, dass ein Nachweis hinterlegt wurde.
+            MB). Ein Admin prüft die Datei anschließend. Die Datei selbst ist nur für Sie und Admins sichtbar —
+            Eltern sehen auf Ihrem Profil lediglich, ob ein Nachweis geprüft und bestätigt wurde.
           </p>
 
           {certError && <div className="form-error">{certError}</div>}
           {certSuccess && <div className="form-success">{certSuccess}</div>}
 
           <div className="badge-row certificate-status">
-            {hasCertificate ? (
-              <span className="badge">Zertifikat hochgeladen</span>
-            ) : (
+            {!hasCertificate ? (
               <span className="badge muted">Kein Zertifikat hochgeladen</span>
+            ) : certificateVerified ? (
+              <span className="badge verified">✓ Von Admin geprüft</span>
+            ) : (
+              <span className="badge honey">Hochgeladen — Prüfung ausstehend</span>
             )}
           </div>
 

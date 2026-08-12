@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import LandingView from "./components/LandingView.jsx";
 import ParentsView from "./components/ParentsView.jsx";
 import ProfileView from "./components/ProfileView.jsx";
 import LoginView from "./components/LoginView.jsx";
@@ -8,9 +9,12 @@ import VerifyEmailView from "./components/VerifyEmailView.jsx";
 import MyBookingsView from "./components/MyBookingsView.jsx";
 import ProviderBookingsView from "./components/ProviderBookingsView.jsx";
 import NotificationBell from "./components/NotificationBell.jsx";
-import { logoutUser } from "./api.js";
+import AdminLoginView from "./components/AdminLoginView.jsx";
+import AdminPanelView from "./components/AdminPanelView.jsx";
+import { logoutUser, adminLogout } from "./api.js";
 
 const STORAGE_KEY = "kk_auth";
+const ADMIN_STORAGE_KEY = "kk_admin_auth"; // separate storage — never mixed with the eltern/tagespflege session
 const AUTH_VIEWS = ["login", "signup", "verify", "forgot"];
 
 function loadAuth() {
@@ -22,10 +26,23 @@ function loadAuth() {
   }
 }
 
+function loadAdminAuth() {
+  try {
+    const raw = localStorage.getItem(ADMIN_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
-  const [view, setView] = useState("home");
+  // Not logged in → the marketing landing page is the front door. Already
+  // has a session from localStorage → skip straight to the directory, same
+  // as before this page existed.
+  const [view, setView] = useState(() => (loadAuth() ? "home" : "landing"));
   const [auth, setAuth] = useState(loadAuth);
   const [pendingEmail, setPendingEmail] = useState("");
+  const [adminAuth, setAdminAuth] = useState(loadAdminAuth);
 
   useEffect(() => {
     if (auth) {
@@ -34,6 +51,14 @@ export default function App() {
       localStorage.removeItem(STORAGE_KEY);
     }
   }, [auth]);
+
+  useEffect(() => {
+    if (adminAuth) {
+      localStorage.setItem(ADMIN_STORAGE_KEY, JSON.stringify(adminAuth));
+    } else {
+      localStorage.removeItem(ADMIN_STORAGE_KEY);
+    }
+  }, [adminAuth]);
 
   function handleLogin(user) {
     setAuth(user);
@@ -49,29 +74,54 @@ export default function App() {
   async function handleLogout() {
     if (auth) await logoutUser(auth.token).catch(() => {});
     setAuth(null);
+    setView("landing");
+  }
+
+  // Logo / "Startseite": logged-in users land on the directory (as before);
+  // logged-out visitors go back to the landing page, not straight into it.
+  function goHome() {
+    setView(auth ? "home" : "landing");
+  }
+
+  function handleAdminLogin(admin) {
+    setAdminAuth(admin);
+  }
+
+  async function handleAdminLogout() {
+    if (adminAuth) await adminLogout(adminAuth.token).catch(() => {});
+    setAdminAuth(null);
     setView("home");
   }
 
-  // The directory (Für Eltern) is the default page and is always shown to
-  // everyone — logged out, eltern, or tagespflege. Only the auth views and
-  // the role-gated views below replace it.
+  // The directory (Für Eltern) is reachable by everyone — logged out,
+  // eltern, or tagespflege — but is no longer the default: logged-out
+  // visitors land on the landing page (view "landing") first and have to
+  // either log in or explicitly choose to browse (LandingView's
+  // onBrowseDirectory sets view to "home").
+  const showLanding = view === "landing";
   const showProfile = view === "profile" && auth?.role === "tagespflege";
   const showMyBookings = view === "bookings" && auth?.role === "eltern";
   const showProviderBookings = view === "provider-bookings" && auth?.role === "tagespflege";
+  const showAdmin = view === "admin";
   const showDirectory =
-    !AUTH_VIEWS.includes(view) && !showProfile && !showMyBookings && !showProviderBookings;
+    !showLanding &&
+    !AUTH_VIEWS.includes(view) &&
+    !showProfile &&
+    !showMyBookings &&
+    !showProviderBookings &&
+    !showAdmin;
 
   return (
     <>
       <nav>
         <div className="wrap">
-          <button type="button" className="logo" onClick={() => setView("home")}>
+          <button type="button" className="logo" onClick={goHome}>
             <span className="logo-mark"></span>Kinderkreis
           </button>
           <div className="nav-links">
             <button
-              className={`nav-btn ${view === "home" ? "active" : ""}`}
-              onClick={() => setView("home")}
+              className={`nav-btn ${view === "home" || view === "landing" ? "active" : ""}`}
+              onClick={goHome}
             >
               Startseite
             </button>
@@ -128,6 +178,13 @@ export default function App() {
       </nav>
 
       <main className="wrap">
+        {showLanding && (
+          <LandingView
+            onGoToLogin={() => setView("login")}
+            onGoToSignup={() => setView("signup")}
+            onBrowseDirectory={() => setView("home")}
+          />
+        )}
         {showDirectory && <ParentsView auth={auth} onGoToLogin={() => setView("login")} />}
         {showProfile && <ProfileView token={auth.token} />}
         {showMyBookings && <MyBookingsView token={auth.token} />}
@@ -157,11 +214,23 @@ export default function App() {
         {view === "forgot" && (
           <ForgotPasswordView onGoToLogin={() => setView("login")} />
         )}
+        {showAdmin && (
+          adminAuth ? (
+            <AdminPanelView admin={adminAuth} onLogout={handleAdminLogout} />
+          ) : (
+            <AdminLoginView onLogin={handleAdminLogin} />
+          )
+        )}
       </main>
 
       <footer>
         Kinderkreis ist ein Konzept-/Projektentwurf zu Demonstrationszwecken und noch kein aktiver,
         registrierter Vermittlungsdienst.
+        <div className="footer-admin-link">
+          <button className="link-btn" onClick={() => setView("admin")}>
+            Admin
+          </button>
+        </div>
       </footer>
     </>
   );

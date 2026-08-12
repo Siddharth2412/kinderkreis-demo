@@ -80,6 +80,12 @@ class Provider(ProviderBase):
     certificate_original_name: Optional[str] = None
     certificate_content_type: Optional[str] = None
     certificate_uploaded_at: Optional[str] = None
+    # Set only by an admin (POST /api/admin/providers/{id}/certificate/verify),
+    # never by the owning account itself. Reset to False by db.py any time the
+    # certificate file changes (re-upload or delete) — a verification always
+    # refers to one specific file, never "whatever is uploaded at the moment".
+    certificate_verified: bool = False
+    certificate_verified_at: Optional[str] = None
 
     @property
     def is_certified(self) -> bool:
@@ -97,7 +103,7 @@ class Provider(ProviderBase):
     def to_public_dict(self) -> dict:
         data = self.model_dump(exclude={
             "owner_email", "certificate_filename", "certificate_original_name",
-            "certificate_content_type", "certificate_uploaded_at",
+            "certificate_content_type", "certificate_uploaded_at", "certificate_verified_at",
         })
         data["is_certified"] = self.is_certified
         data["free_places"] = self.free_places
@@ -105,8 +111,22 @@ class Provider(ProviderBase):
         # booking request is even possible (only account-linked profiles have
         # someone able to confirm one).
         data["is_bookable"] = self.owner_email is not None
-        # Whether a Qualifikationsnachweis has been uploaded — the file itself
-        # stays private to the owning account (see certificate endpoints).
+        # Whether a Qualifikationsnachweis has been uploaded, and whether an
+        # admin has reviewed and confirmed it (the "verification tick") — the
+        # file itself stays private to the owning account and to admins.
+        data["has_certificate"] = self.has_certificate
+        data["certificate_verified"] = self.certificate_verified
+        return data
+
+    def to_admin_dict(self) -> dict:
+        """Everything an admin needs to review a certificate: which account
+        owns it, upload metadata, verification status. Deliberately keeps
+        owner_email (unlike to_public_dict) but still hides the raw on-disk
+        filename/content-type — admins fetch the file itself through the
+        dedicated download endpoint, not this listing."""
+        data = self.model_dump(exclude={"certificate_filename", "certificate_content_type"})
+        data["is_certified"] = self.is_certified
+        data["free_places"] = self.free_places
         data["has_certificate"] = self.has_certificate
         return data
 

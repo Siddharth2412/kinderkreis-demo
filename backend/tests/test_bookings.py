@@ -149,8 +149,46 @@ def test_cancel_someone_elses_booking_rejected(client, provider_profile, eltern)
     assert res.status_code == 404
 
 
-def test_cancel_already_confirmed_booking_rejected(client, provider_profile, eltern, tagespflege):
+def test_cancel_confirmed_booking_success(client, provider_profile, eltern, tagespflege):
+    """Eltern can back out of an already-confirmed booking too, not just a
+    still-pending request — plans change after confirmation as well."""
     booking_id = _create_pending_booking(client, provider_profile, eltern)
     client.post(f"/api/bookings/{booking_id}/confirm", headers=auth_headers(tagespflege["token"]))
     res = client.post(f"/api/bookings/{booking_id}/cancel", headers=auth_headers(eltern["token"]))
+    assert res.status_code == 200
+    assert res.json()["status"] == "cancelled"
+
+
+def test_cancel_declined_booking_rejected(client, provider_profile, eltern, tagespflege):
+    booking_id = _create_pending_booking(client, provider_profile, eltern)
+    client.post(f"/api/bookings/{booking_id}/decline", headers=auth_headers(tagespflege["token"]))
+    res = client.post(f"/api/bookings/{booking_id}/cancel", headers=auth_headers(eltern["token"]))
     assert res.status_code == 409
+
+
+def test_cancel_already_cancelled_booking_rejected(client, provider_profile, eltern):
+    booking_id = _create_pending_booking(client, provider_profile, eltern)
+    client.post(f"/api/bookings/{booking_id}/cancel", headers=auth_headers(eltern["token"]))
+    res = client.post(f"/api/bookings/{booking_id}/cancel", headers=auth_headers(eltern["token"]))
+    assert res.status_code == 409
+
+
+def test_cancel_notifies_provider(client, provider_profile, eltern, tagespflege):
+    booking_id = _create_pending_booking(client, provider_profile, eltern)
+    client.post(f"/api/bookings/{booking_id}/cancel", headers=auth_headers(eltern["token"]))
+    res = client.get("/api/notifications", headers=auth_headers(tagespflege["token"]))
+    types = [n["type"] for n in res.json()["notifications"]]
+    assert "booking_cancelled" in types
+
+
+def test_cancel_sends_email_to_provider(client, provider_profile, eltern, tagespflege, caplog):
+    """SMTP_HOST is unset in tests, so _send_email just logs (see
+    app.main._send_email) — enough to prove the cancellation email was
+    dispatched to the provider's account email."""
+    booking_id = _create_pending_booking(client, provider_profile, eltern)
+    with caplog.at_level("INFO", logger="kinderkreis"):
+        res = client.post(f"/api/bookings/{booking_id}/cancel", headers=auth_headers(eltern["token"]))
+    assert res.status_code == 200
+
+    email_logs = [r.message for r in caplog.records if r.message.startswith("[DEV] Email")]
+    assert any("provider@example.test" in msg and "storniert" in msg for msg in email_logs)

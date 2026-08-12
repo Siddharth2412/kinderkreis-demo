@@ -87,6 +87,44 @@ export const fetchMyCertificateBlob = async (token) => {
   return { blob: await res.blob(), filename: match ? match[1] : "zertifikat" };
 };
 
+// Admin — a separate username/password login, unrelated to the eltern/
+// tagespflege accounts above (own token, checked against its own endpoints
+// only). See backend/app/main.py's "Admin endpoints" section.
+export const adminLogin = (username, password) =>
+  request("/api/admin/login", { method: "POST", body: JSON.stringify({ username, password }) });
+
+export const adminLogout = (token) =>
+  request("/api/admin/logout", { method: "POST", body: JSON.stringify({ token }) });
+
+export const fetchAdminProviders = (token) =>
+  request("/api/admin/providers", { headers: authHeaders(token) });
+
+export const verifyProviderCertificate = (token, providerId) =>
+  request(`/api/admin/providers/${providerId}/certificate/verify`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+
+export const unverifyProviderCertificate = (token, providerId) =>
+  request(`/api/admin/providers/${providerId}/certificate/unverify`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+
+// Same blob-fetch pattern as fetchMyCertificateBlob (see below) — the admin
+// download endpoint requires the same Bearer token as everything else here.
+export const fetchAdminCertificateBlob = async (token, providerId) => {
+  const res = await fetch(`${BASE_URL}/api/admin/providers/${providerId}/certificate`, {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(typeof body.detail === "string" ? body.detail : `Anfrage fehlgeschlagen (${res.status})`);
+  }
+  const match = (res.headers.get("Content-Disposition") || "").match(/filename="?([^";]+)"?/);
+  return { blob: await res.blob(), filename: match ? match[1] : "zertifikat" };
+};
+
 export const loginUser = (email, password) =>
   request("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
 

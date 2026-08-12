@@ -98,6 +98,8 @@ def _migrate_providers_table(conn: sqlite3.Connection) -> None:
         "certificate_original_name": "TEXT",
         "certificate_content_type": "TEXT",
         "certificate_uploaded_at": "TEXT",
+        "certificate_verified": "INTEGER NOT NULL DEFAULT 0",
+        "certificate_verified_at": "TEXT",
     }
     for name, col_type in new_columns.items():
         if name not in existing:
@@ -192,6 +194,23 @@ def init_db() -> None:
             """
         )
         _migrate_providers_table(conn)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admins (
+                username TEXT PRIMARY KEY,
+                hashed_password TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_sessions (
+                token TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+            """
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +320,7 @@ _PROVIDER_FIELDS = (
 _CERTIFICATE_FIELDS = (
     "certificate_filename", "certificate_original_name",
     "certificate_content_type", "certificate_uploaded_at",
+    "certificate_verified", "certificate_verified_at",
 )
 
 
@@ -310,6 +330,7 @@ def _row_to_provider_dict(row: sqlite3.Row) -> dict:
     data["has_pflegeerlaubnis"] = bool(row["has_pflegeerlaubnis"])
     for field in _CERTIFICATE_FIELDS:
         data[field] = row[field]
+    data["certificate_verified"] = bool(data["certificate_verified"])
     return data
 
 
@@ -389,13 +410,18 @@ def set_provider_certificate(
 ) -> None:
     """Record the on-disk filename (under CERTIFICATES_DIR) plus display
     metadata for a provider's uploaded Qualifikationsnachweis. The endpoint
-    layer is responsible for actually writing/removing the file bytes."""
+    layer is responsible for actually writing/removing the file bytes.
+
+    Every (re-)upload also resets certificate_verified — an admin verified a
+    specific file, and a replacement hasn't been reviewed yet, so the tick
+    must not silently carry over to unreviewed content."""
     with _connect() as conn:
         conn.execute(
             """
             UPDATE providers
             SET certificate_filename = ?, certificate_original_name = ?,
-                certificate_content_type = ?, certificate_uploaded_at = ?
+                certificate_content_type = ?, certificate_uploaded_at = ?,
+                certificate_verified = 0, certificate_verified_at = NULL
             WHERE id = ?
             """,
             (filename, original_name, content_type, uploaded_at, provider_id),
@@ -408,10 +434,21 @@ def clear_provider_certificate(provider_id: int) -> None:
             """
             UPDATE providers
             SET certificate_filename = NULL, certificate_original_name = NULL,
-                certificate_content_type = NULL, certificate_uploaded_at = NULL
+                certificate_content_type = NULL, certificate_uploaded_at = NULL,
+                certificate_verified = 0, certificate_verified_at = NULL
             WHERE id = ?
             """,
             (provider_id,),
+        )
+
+
+def set_certificate_verified(provider_id: int, verified: bool, verified_at: Optional[str]) -> None:
+    """Admin-only action (see main.py's /api/admin/... endpoints) — marks the
+    currently uploaded certificate as reviewed, or retracts that review."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE providers SET certificate_verified = ?, certificate_verified_at = ? WHERE id = ?",
+            (1 if verified else 0, verified_at, provider_id),
         )
 
 
@@ -545,3 +582,52 @@ def mark_all_notifications_read(recipient_email: str) -> None:
             "UPDATE notifications SET is_read = 1 WHERE recipient_email = ? AND is_read = 0",
             (recipient_email,),
         )
+
+
+# ---------------------------------------------------------------------------
+# Admins — deliberately separate from `users`: username/password only, no
+# email/OTP/role, and its own session table (admin_sessions) so an admin
+# token can never be confused with (or reused as) an eltern/tagespflege one.
+# ---------------------------------------------------------------------------
+
+def get_admin(username: str) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM admins WHERE username = ?", (username,)).fetchone()
+    if not row:
+        return None
+    return {"username": row["username"], "hashed_password": row["hashed_password"]}
+
+
+def seed_admin_if_empty(username: str, hashed_password: str) -> None:
+    """Creates the one admin account, but only the very first time the
+    admins table is empty — like seed_providers_if_empty, this never
+    overwrites credentials on later restarts, so changing ADMIN_USERNAME/
+    ADMIN_PASSWORD after the first run has no effect on an existing DB."""
+    with _connect() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM admins").fetchone()[0]
+        if count:
+            return
+        conn.execute(
+            "INSERT INTO admins (username, hashed_password) VALUES (?, ?)", (username, hashed_password)
+        )
+
+
+def create_admin_session(token: str, username: str, expires_at: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO admin_sessions (token, username, expires_at) VALUES (?, ?, ?)",
+            (token, username, expires_at),
+        )
+
+
+def get_admin_session(token: str) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM admin_sessions WHERE token = ?", (token,)).fetchone()
+    if not row:
+        return None
+    return {"token": row["token"], "username": row["username"], "expires_at": row["expires_at"]}
+
+
+def delete_admin_session(token: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM admin_sessions WHERE token = ?", (token,))

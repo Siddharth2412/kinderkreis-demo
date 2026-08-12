@@ -42,13 +42,24 @@ resource-constrained.
 
 ## What you can do in the demo
 
-- **Startseite** (nav link + clicking the logo, always visible): returns to
-  the directory from anywhere in the app — including mid-login/signup.
-- **Directory** (the default/home page): visible to everyone — logged out,
-  `eltern`, or `tagespflege` — filter by city, child's age, care type
-  (individual vs. group), availability, and certification status. Click a
-  card to see the full profile in a modal. Never shows any account or
-  ownership info — just the public listing fields.
+- **Landing page** (logged-out front door): whoever isn't logged in lands
+  here first, not directly in the directory — a hero with "Jetzt
+  registrieren"/"Anmelden", a 3-step "So funktioniert's" explainer, a short
+  "Warum Kinderkreis" section highlighting the QHB qualification display and
+  the admin-verified certificate tick, and a contact section. A "Oder direkt
+  Betreuungsangebote ansehen →" link lets you skip straight to the directory
+  without an account, same as before this page existed. Contact details
+  there (`frontend/src/components/LandingView.jsx`) are placeholders — swap
+  them for the real ones when available.
+- **Startseite** (nav link + clicking the logo): the landing page again if
+  you're logged out, the directory if you're logged in — same link, the
+  destination just depends on whether you have a session.
+- **Directory** ("Betreuungsangebote ansehen" from the landing page, or the
+  home page once logged in): visible to everyone — logged out, `eltern`, or
+  `tagespflege` — filter by city, child's age, care type (individual vs.
+  group), availability, and certification status. Click a card to see the
+  full profile in a modal. Never shows any account or ownership info — just
+  the public listing fields.
 - **Profil bearbeiten** (nav link, only shown to a logged-in `tagespflege`
   account): "Mein Profil" — a page mapped to that account which shows the
   current listing (or an empty form the first time) and lets you create or
@@ -69,7 +80,12 @@ resource-constrained.
   a request against them.
 - **Meine Anfragen** (nav link, `eltern`): the status of every booking
   request you've sent — offen/bestätigt/abgelehnt/storniert — with the
-  option to withdraw a still-open request.
+  option to cancel it, whether it's still open ("Anfrage zurückziehen") or
+  already confirmed ("Buchung stornieren"); only a declined or already-
+  cancelled one can't be cancelled again. Either way the owning
+  Tagespflegeperson gets an in-app notification *and* an email (they may
+  not be logged in when it happens, especially for an already-confirmed
+  booking they may have blocked time out for).
 - **Buchungsanfragen** (nav link, `tagespflege`): incoming requests for your
   own profile, with Confirm/Decline actions on open ones.
 - **Notification bell** (nav, any logged-in account): an in-app inbox,
@@ -88,6 +104,23 @@ Seed data (5 sample providers across Göttingen, Hannover, and Braunschweig)
 is loaded on backend startup so the directory isn't empty on first run. The
 seed providers have no linked account, so — like the real workflow — they
 can't receive booking requests until claimed by a `tagespflege` signup.
+
+- **Admin** (footer link "Admin", separate from everything above): a plain
+  username/password login — no email, no OTP, no `eltern`/`tagespflege`
+  role, and its own session type entirely, so an admin token is never valid
+  on a user endpoint or vice versa. Provisioned via `ADMIN_USERNAME`/
+  `ADMIN_PASSWORD` in `.env` (defaults: `admin` / `admin123`) the first time
+  the database is created — there's no admin signup form on purpose. The
+  panel lists every provider that has uploaded a Qualifikationsnachweis,
+  lets the admin open/download the file, and mark it "✓ Geprüft" (or
+  retract that). That tick — and only that tick — is what parents see on
+  the public directory next to a provider's certification status; the file
+  itself always stays private to its owner and to admins. Re-uploading or
+  deleting a certificate resets the tick, since a verification is tied to
+  one specific file, never to "whatever is currently uploaded". Verifying
+  also emails the Tagespflegeperson (same SMTP plumbing as OTPs/booking
+  confirmations) in addition to the in-app notification, since they may not
+  be logged in when it happens; retracting a verification does not send one.
 
 ## API endpoints
 
@@ -112,17 +145,24 @@ can't receive booking requests until claimed by a `tagespflege` signup.
 | POST   | `/api/auth/reset-password`         | Consume the OTP and set a new password    |
 | POST   | `/api/bookings`                    | 🔒👪 Send a booking request to a provider  |
 | GET    | `/api/bookings/mine`                | 🔒👪 Your own booking requests             |
-| POST   | `/api/bookings/{id}/cancel`         | 🔒👪 Withdraw a still-open request         |
+| POST   | `/api/bookings/{id}/cancel`         | 🔒👪 Cancel a pending or already-confirmed booking (emails the provider) |
 | GET    | `/api/bookings/provider`            | 🔒🧑‍🍼 Requests received on your own profile |
 | POST   | `/api/bookings/{id}/confirm`        | 🔒🧑‍🍼 Confirm a request (emails the parent) |
 | POST   | `/api/bookings/{id}/decline`        | 🔒🧑‍🍼 Decline a request                    |
 | GET    | `/api/notifications`               | 🔒 Your in-app notifications + unread count |
 | POST   | `/api/notifications/{id}/read`     | 🔒 Mark one notification read              |
 | POST   | `/api/notifications/read-all`      | 🔒 Mark all notifications read             |
+| POST   | `/api/admin/login`                 | Admin login (username/password, returns a session token) |
+| POST   | `/api/admin/logout`                | Invalidate an admin session token         |
+| GET    | `/api/admin/providers`             | 🔒🛡️ Providers with an uploaded certificate, newest first |
+| GET    | `/api/admin/providers/{id}/certificate` | 🔒🛡️ Download a provider's certificate |
+| POST   | `/api/admin/providers/{id}/certificate/verify` | 🔒🛡️ Mark the certificate verified (parent-visible tick) |
+| POST   | `/api/admin/providers/{id}/certificate/unverify` | 🔒🛡️ Retract a verification |
 
 🔒 = requires `Authorization: Bearer <token>` (from login/verify-email).
 👪 = additionally requires `role: "eltern"`.
 🧑‍🍼 = additionally requires `role: "tagespflege"`.
+🛡️ = admin token only (from `/api/admin/login`) — never interchangeable with a 🔒 user token.
 
 ## Project layout
 
@@ -148,6 +188,7 @@ kinderkreis-demo/
 │       ├── test_auth.py
 │       ├── test_providers.py
 │       ├── test_certificates.py
+│       ├── test_admin.py
 │       ├── test_bookings.py
 │       └── test_notifications.py
 └── frontend/
@@ -162,7 +203,8 @@ kinderkreis-demo/
         ├── api.js
         ├── styles.css
         └── components/
-            ├── ParentsView.jsx
+            ├── LandingView.jsx        # logged-out front door — placeholder contact details
+            ├── ParentsView.jsx        # the directory ("Für Eltern")
             ├── ProfileView.jsx        # "Mein Profil" — own provider listing, create/edit
             ├── ProviderCard.jsx
             ├── ProviderDetailModal.jsx
@@ -173,7 +215,9 @@ kinderkreis-demo/
             ├── LoginView.jsx
             ├── SignupView.jsx
             ├── VerifyEmailView.jsx
-            └── ForgotPasswordView.jsx
+            ├── ForgotPasswordView.jsx
+            ├── AdminLoginView.jsx        # separate username/password login (footer "Admin" link)
+            └── AdminPanelView.jsx        # certificate review queue — view/verify/unverify
 ```
 
 ## Local development without Docker
@@ -200,8 +244,10 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-84 tests covering auth, the provider directory + regulatory validation
-rules, certificate upload/download/delete, bookings, and notifications. Each
+111 tests covering auth, the provider directory + regulatory validation
+rules, certificate upload/download/delete, the admin login + certificate
+review/verify flow (including the verification email), bookings (including
+cancelling a confirmed one and the resulting email), and notifications. Each
 test runs against its own throwaway SQLite DB and certificate folder, so the
 suite never touches `app/data/kinderkreis.db` — see `backend/tests/README.md`
 for the breakdown.
@@ -252,8 +298,12 @@ the `docker build` command above by hand each time.
   writes.
 - Add messaging between parents and providers, and let a provider account
   see which parents viewed/contacted them.
-- Verify Pflegeerlaubnis and qualification claims against Jugendamt records
-  rather than trusting self-reported form data — including the uploaded
-  Qualifikationsnachweis (currently just stored, never reviewed/approved by
-  anyone).
+- Verify Pflegeerlaubnis claims against Jugendamt records rather than
+  trusting the self-reported checkbox on the profile form (the uploaded
+  Qualifikationsnachweis itself now goes through an admin verification step
+  — see the Admin panel above — but that's a manual review, not an
+  automated registry check).
+- Give admins actual accounts (name, multiple admins, an audit log of who
+  verified what) instead of the single shared username/password login —
+  fine for a demo, not for a real moderation team.
 - Add photo upload for provider profiles (certificate upload already exists).

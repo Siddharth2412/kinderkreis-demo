@@ -9,12 +9,13 @@ def test_list_providers_returns_seed_data(client):
     body = res.json()
     assert body["count"] == SEED_COUNT
     assert len(body["providers"]) == SEED_COUNT
-    # Public fields present, internal ones never leaked.
+    # Public fields present, internal/admin-only ones never leaked.
     p = body["providers"][0]
-    for field in ("is_certified", "free_places", "is_bookable", "has_certificate"):
+    for field in ("is_certified", "free_places", "is_bookable", "has_certificate", "certificate_verified"):
         assert field in p
     assert "owner_email" not in p
     assert "certificate_filename" not in p
+    assert "certificate_verified_at" not in p
 
 
 def test_list_providers_filters_by_city(client):

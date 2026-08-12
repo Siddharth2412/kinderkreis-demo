@@ -25,9 +25,11 @@ from fastapi.testclient import TestClient  # noqa: E402  (must follow the env va
 
 from app import db  # noqa: E402
 from app.data import SEED_PROVIDERS  # noqa: E402
-from app.main import app  # noqa: E402
+from app.main import _hash_password, app  # noqa: E402
 
 DEFAULT_PASSWORD = "testpass123"
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "adminpass123"
 
 
 @pytest.fixture()
@@ -44,6 +46,10 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     db.init_db()
     db.CERTIFICATES_DIR.mkdir(parents=True, exist_ok=True)
     db.seed_providers_if_empty([p.model_dump() for p in SEED_PROVIDERS])
+    # app.main only seeds the admin once, at its own (session-wide) import
+    # time — against the session temp DB, not this test's fresh one — so
+    # each test needs its own seed, same as the provider seed above.
+    db.seed_admin_if_empty(ADMIN_USERNAME, _hash_password(ADMIN_PASSWORD))
 
     with TestClient(app) as c:
         yield c
@@ -114,4 +120,12 @@ def provider_profile(client: TestClient, tagespflege: dict) -> dict:
         "/api/providers/me", json=VALID_PROVIDER_PAYLOAD, headers=auth_headers(tagespflege["token"])
     )
     assert res.status_code == 201, res.text
+    return res.json()
+
+
+@pytest.fixture()
+def admin(client: TestClient) -> dict:
+    """A logged-in admin session (token + username), for the /api/admin/... endpoints."""
+    res = client.post("/api/admin/login", json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD})
+    assert res.status_code == 200, res.text
     return res.json()

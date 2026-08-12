@@ -32,6 +32,7 @@ export default function ProviderCard({ provider, onSelect }) {
       </div>
 
       <div className="badge-row">
+        {provider.certificate_verified && <span className="badge verified">✓ Geprüft</span>}
         {provider.is_certified ? (
           <span className="badge">Zertifiziert</span>
         ) : (

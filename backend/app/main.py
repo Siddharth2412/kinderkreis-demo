@@ -29,6 +29,7 @@ logger = logging.getLogger("kinderkreis")
 
 SESSION_TTL = timedelta(hours=24)
 OTP_TTL = timedelta(minutes=10)
+ADMIN_SESSION_TTL = timedelta(hours=12)
 
 app = FastAPI(
     title="Kinderkreis API",
@@ -96,6 +97,19 @@ def _verify_password(password: str, stored: str) -> bool:
     salt_hex, expected_hex = stored.split(":", 1)
     actual = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1)
     return hmac.compare_digest(actual.hex(), expected_hex)
+
+
+# The admin account is entirely separate from `users` — username/password
+# only, no email/OTP/role — so it's provisioned via env vars rather than a
+# public signup form (there must be no self-service way to become an admin).
+# Like the provider seed near the top of this file, this only takes effect on
+# a fresh database; changing ADMIN_USERNAME/ADMIN_PASSWORD later has no
+# effect on an existing one (there's deliberately no "change admin password"
+# endpoint either — swap the env vars and reset the DB if that's ever needed).
+db.seed_admin_if_empty(
+    os.environ.get("ADMIN_USERNAME", "admin"),
+    _hash_password(os.environ.get("ADMIN_PASSWORD", "admin123")),
+)
 
 
 def _generate_otp() -> str:
@@ -221,6 +235,33 @@ def _require_eltern(user: dict) -> None:
         raise HTTPException(403, "Nur für Eltern")
 
 
+def _create_admin_session(username: str) -> str:
+    token = secrets.token_hex(32)
+    expires_at = (datetime.utcnow() + ADMIN_SESSION_TTL).isoformat()
+    db.create_admin_session(token, username, expires_at)
+    return token
+
+
+def _current_admin(authorization: Optional[str] = Header(None)) -> dict:
+    """Resolve the logged-in admin from an `Authorization: Bearer <token>`
+    header — mirrors _current_user, but against admin_sessions/admins, a
+    completely separate table pair from the eltern/tagespflege ones. An
+    admin token is never valid on a /api/... user endpoint and vice versa,
+    since each dependency only ever looks in its own session table."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Nicht angemeldet")
+    token = authorization.removeprefix("Bearer ").strip()
+    session = db.get_admin_session(token)
+    if not session or datetime.utcnow() > datetime.fromisoformat(session["expires_at"]):
+        if session:
+            db.delete_admin_session(token)
+        raise HTTPException(401, "Sitzung ungültig oder abgelaufen. Bitte erneut anmelden.")
+    admin = db.get_admin(session["username"])
+    if not admin:
+        raise HTTPException(401, "Admin nicht gefunden")
+    return admin
+
+
 def _notify(recipient_email: str, type_: str, booking_id: Optional[int], title: str, body: str) -> None:
     """Insert an in-app notification for a user. No email is sent here — email
     is reserved for the one moment the spec calls for it (booking confirmed),
@@ -252,6 +293,15 @@ class UserLogin(BaseModel):
 
 
 class LogoutRequest(BaseModel):
+    token: str
+
+
+class AdminLogin(BaseModel):
+    username: str = Field(..., min_length=1, max_length=80)
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+class AdminLogoutRequest(BaseModel):
     token: str
 
 
@@ -377,6 +427,103 @@ def reset_password(payload: ResetPasswordRequest):
     _validate_otp("reset", email, payload.otp)
     db.set_user_password(email, _hash_password(payload.new_password))
     return {"detail": "Passwort erfolgreich zurückgesetzt"}
+
+
+# ---------------------------------------------------------------------------
+# Admin endpoints
+#
+# Username/password only — a completely separate login from the eltern/
+# tagespflege accounts above (own tables, own session type, no email/OTP/
+# role). The account itself is provisioned via ADMIN_USERNAME/ADMIN_PASSWORD
+# at startup (see db.seed_admin_if_empty above); there is deliberately no
+# admin signup endpoint. An admin reviews uploaded Qualifikationsnachweis
+# files and marks them verified — the only way a provider gets the "✓
+# geprüft" tick parents see on the public directory.
+# ---------------------------------------------------------------------------
+
+@app.post("/api/admin/login")
+def admin_login(payload: AdminLogin):
+    admin = db.get_admin(payload.username.strip())
+    if not admin or not _verify_password(payload.password, admin["hashed_password"]):
+        raise HTTPException(401, "Ungültiger Benutzername oder Passwort")
+    return {"token": _create_admin_session(admin["username"]), "username": admin["username"]}
+
+
+@app.post("/api/admin/logout")
+def admin_logout(payload: AdminLogoutRequest):
+    db.delete_admin_session(payload.token)
+    return {"status": "ok"}
+
+
+@app.get("/api/admin/providers")
+def admin_list_providers(admin: dict = Depends(_current_admin)):
+    """The review queue: only providers with a certificate on file — nothing
+    to verify for the rest — newest upload first so freshly submitted ones
+    surface at the top."""
+    with_certificate = [Provider(**row) for row in db.list_providers() if row.get("certificate_filename")]
+    with_certificate.sort(key=lambda p: p.certificate_uploaded_at or "", reverse=True)
+    return {"providers": [p.to_admin_dict() for p in with_certificate]}
+
+
+@app.get("/api/admin/providers/{provider_id}/certificate")
+def admin_download_certificate(provider_id: int, admin: dict = Depends(_current_admin)):
+    row = db.get_provider(provider_id)
+    filename = row.get("certificate_filename") if row else None
+    if not filename:
+        raise HTTPException(404, "Kein Zertifikat hinterlegt")
+    path = db.CERTIFICATES_DIR / filename
+    if not path.exists():
+        raise HTTPException(404, "Zertifikatsdatei nicht gefunden")
+    return FileResponse(
+        path,
+        media_type=row["certificate_content_type"] or "application/octet-stream",
+        filename=row["certificate_original_name"] or filename,
+    )
+
+
+@app.post("/api/admin/providers/{provider_id}/certificate/verify")
+def admin_verify_certificate(
+    provider_id: int, background_tasks: BackgroundTasks, admin: dict = Depends(_current_admin)
+):
+    row = db.get_provider(provider_id)
+    if not row or not row.get("certificate_filename"):
+        raise HTTPException(404, "Kein Zertifikat hinterlegt")
+    db.set_certificate_verified(provider_id, True, datetime.utcnow().isoformat())
+    if row.get("owner_email"):
+        _notify(
+            row["owner_email"], "certificate_verified", None,
+            title="Zertifikat geprüft",
+            body="Ihr hochgeladenes Zertifikat wurde von einem Admin geprüft und bestätigt.",
+        )
+        # Email, not just the in-app notification — a Tagespflegeperson may
+        # not be logged in when this happens, and this is a one-time,
+        # meaningful status change worth an email (same reasoning as the
+        # booking-confirmed email below). Backgrounded so the admin's
+        # request doesn't wait on the SMTP round-trip.
+        owner = db.get_user(row["owner_email"])
+        owner_name = owner["name"] if owner else row["owner_email"]
+        background_tasks.add_task(
+            _send_email,
+            row["owner_email"],
+            subject="Kinderkreis – Ihr Zertifikat wurde geprüft und bestätigt",
+            body=(
+                f"Hallo {owner_name},\n\n"
+                f"Ihr hochgeladenes Zertifikat für „{row['name']}\" wurde von einem Admin geprüft und "
+                "bestätigt. Ihr Profil zeigt Eltern ab sofort das Prüf-Häkchen „✓ Geprüft\".\n\n"
+                "Vielen Dank, dass Sie Ihre Qualifikation nachgewiesen haben."
+            ),
+            category="Certificate",
+        )
+    return Provider(**db.get_provider(provider_id)).to_admin_dict()
+
+
+@app.post("/api/admin/providers/{provider_id}/certificate/unverify")
+def admin_unverify_certificate(provider_id: int, admin: dict = Depends(_current_admin)):
+    row = db.get_provider(provider_id)
+    if not row:
+        raise HTTPException(404, "Provider nicht gefunden")
+    db.set_certificate_verified(provider_id, False, None)
+    return Provider(**db.get_provider(provider_id)).to_admin_dict()
 
 
 # ---------------------------------------------------------------------------
@@ -612,15 +759,49 @@ def list_my_bookings(user: dict = Depends(_current_user)):
 
 
 @app.post("/api/bookings/{booking_id}/cancel")
-def cancel_booking(booking_id: int, user: dict = Depends(_current_user)):
+def cancel_booking(booking_id: int, background_tasks: BackgroundTasks, user: dict = Depends(_current_user)):
     _require_eltern(user)
     row = db.get_booking(booking_id)
     if not row or row["parent_email"] != user["email"]:
         raise HTTPException(404, "Buchungsanfrage nicht gefunden")
-    if row["status"] != "pending":
-        raise HTTPException(409, "Nur offene Anfragen können storniert werden")
+    # Eltern can cancel a still-open request or back out of an already
+    # confirmed booking (plans change) — just not one that's already been
+    # declined or cancelled.
+    if row["status"] not in ("pending", "confirmed"):
+        raise HTTPException(409, "Diese Buchung kann nicht mehr storniert werden")
+    was_confirmed = row["status"] == "confirmed"
     db.update_booking_status(booking_id, "cancelled", datetime.utcnow().isoformat())
-    return _booking_for_parent(db.get_booking(booking_id), db.get_provider(row["provider_id"]))
+    provider_row = db.get_provider(row["provider_id"])
+
+    # The provider always has an account by this point — booking creation
+    # requires provider_row["owner_email"] to be set — but guard anyway
+    # rather than assume it.
+    if provider_row and provider_row.get("owner_email"):
+        _notify(
+            provider_row["owner_email"], "booking_cancelled", booking_id,
+            title="Buchung storniert",
+            body=f"{user['name']} hat die Buchung für {row['child_name']} am {row['start_date']} storniert.",
+        )
+        # Email too, not just the in-app notification — the provider may
+        # have already blocked out the time (especially for a confirmed
+        # booking) and may not be logged in when this happens.
+        time_range = f"{row['start_hour']:02d}:00–{row['end_hour']:02d}:00 Uhr"
+        background_tasks.add_task(
+            _send_email,
+            provider_row["owner_email"],
+            subject=f"Kinderkreis – Buchung storniert: {row['child_name']} am {row['start_date']}",
+            body=(
+                f"{user['name']} hat die "
+                + ("bereits bestätigte " if was_confirmed else "")
+                + f"Buchung für {row['child_name']} am {row['start_date']} ({time_range}) storniert.\n\n"
+                f"Adresse: {row['parent_address']}\nTelefon: {row['parent_phone']}\n\n"
+                + ("Falls Sie den Platz für dieses Kind bereits eingeplant hatten, ist er jetzt wieder frei."
+                   if was_confirmed else "")
+            ),
+            category="Booking",
+        )
+
+    return _booking_for_parent(db.get_booking(booking_id), provider_row)
 
 
 @app.get("/api/bookings/provider")

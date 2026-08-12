@@ -72,14 +72,18 @@ export default function MyBookingsView({ token }) {
                   {b.parent_address} · {b.parent_phone}
                 </p>
                 {b.message && <p className="modal-bio">„{b.message}"</p>}
-                {b.status === "pending" && (
+                {(b.status === "pending" || b.status === "confirmed") && (
                   <div className="form-actions">
                     <button
                       className="btn-ghost btn-small"
                       onClick={() => handleCancel(b.id)}
                       disabled={busyId === b.id}
                     >
-                      {busyId === b.id ? "Wird storniert …" : "Anfrage zurückziehen"}
+                      {busyId === b.id
+                        ? "Wird storniert …"
+                        : b.status === "confirmed"
+                        ? "Buchung stornieren"
+                        : "Anfrage zurückziehen"}
                     </button>
                   </div>
                 )}
