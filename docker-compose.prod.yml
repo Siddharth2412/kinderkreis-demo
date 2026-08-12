@@ -1,0 +1,52 @@
+# Production compose file: builds the frontend's `production` stage
+# (static bundle served by nginx:alpine) instead of the Vite dev server, and
+# runs the backend without the live-source bind mount. See README.md
+# "Deploying to production" for the reasoning.
+#
+# Usage (also see .github/workflows/deploy.yml, which runs this on every
+# push to main via a self-hosted runner on the VM):
+#   docker compose -f docker-compose.prod.yml build
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Requires a `.env` file next to this one (see .env.example) and
+# VITE_API_URL to be set in the shell environment before `build` — Vite
+# bakes it into the JS bundle at build time, so docker-compose can only pass
+# it through as a build arg, not a runtime env var:
+#   export VITE_API_URL=http://<VM_PUBLIC_IP>:8000
+services:
+  backend:
+    build: ./backend
+    container_name: kinderkreis-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    mem_limit: 300m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      target: production
+      args:
+        VITE_API_URL: ${VITE_API_URL}
+    container_name: kinderkreis-frontend
+    ports:
+      - "80:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 100m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5173/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped

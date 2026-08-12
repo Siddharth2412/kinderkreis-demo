@@ -286,10 +286,37 @@ of a few hundred — instead of running `npm run dev`. A few things to know:
   instead of SMTP; the surrounding code (attachments, categories, dev-log
   fallback) doesn't need to change, just the transport.
 
-If you're deploying for real (not just a one-off), it's worth asking for a
-small `docker-compose.prod.yml` at that point (production target + backend
-without the live-source mount + `mem_limit` guard rails) rather than typing
-the `docker build` command above by hand each time.
+## CI/CD: deploying to a VM via GitHub Actions
+
+`docker-compose.prod.yml` is the lean deploy-time compose file (production
+target + backend without the live-source mount + `mem_limit` guard rails)
+referenced above, and `.github/workflows/deploy.yml` builds and redeploys it
+automatically on every push to `main`, via a **self-hosted GitHub Actions
+runner** installed on the VM itself (not GitHub-hosted runners — the runner
+needs to *be* the deploy target, since it runs `docker compose up` directly
+on the box).
+
+One-time VM setup:
+
+1. Provision a blank Ubuntu 22.04/24.04 VM and run `scripts/setup-vm.sh` on
+   it (installs Docker + the Compose plugin, opens ports 22/80/8000 via
+   `ufw`). It ends by printing the commands to register the box as a
+   self-hosted runner labeled `kinderkreis-prod` (needs a one-time token
+   from the GitHub UI, so that part can't be scripted unattended).
+2. Add these repo secrets under **Settings → Secrets and variables →
+   Actions**: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
+   `FROM_EMAIL`, `FROM_NAME`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`,
+   `ALLOWED_ORIGINS` (= `http://<VM_PUBLIC_IP>`), and `VITE_API_URL`
+   (= `http://<VM_PUBLIC_IP>:8000`) — see `.env.example` for what each does.
+3. Push to `main` (or trigger the workflow manually from the Actions tab).
+   The workflow writes `.env` from those secrets, builds both images,
+   `docker compose -f docker-compose.prod.yml up -d`, and waits for both
+   containers' health checks before finishing.
+
+No domain/HTTPS is set up by this path — the app is served plain HTTP on
+the VM's public IP (frontend on port 80, API on port 8000). Add a reverse
+proxy (Caddy or nginx) with Let's Encrypt once you have a domain to point
+at it.
 
 ## Next steps for a real product
 

@@ -1,0 +1,64 @@
+name: Deploy to VM
+
+# Runs on the self-hosted runner installed on the production VM (see
+# scripts/setup-vm.sh). Every push to main rebuilds and redeploys both
+# containers via docker-compose.prod.yml. Trigger manually from the Actions
+# tab with "Run workflow" too.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, kinderkreis-prod]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Written fresh on every deploy from GitHub Secrets rather than kept
+      # as a standing file on the VM, so rotating a secret in GitHub is
+      # enough — nothing to remember to update on the box itself.
+      - name: Write .env
+        run: |
+          cat > .env <<EOF
+          SMTP_HOST=${{ secrets.SMTP_HOST }}
+          SMTP_PORT=${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME=${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
+          FROM_EMAIL=${{ secrets.FROM_EMAIL }}
+          FROM_NAME=${{ secrets.FROM_NAME }}
+          ALLOWED_ORIGINS=${{ secrets.ALLOWED_ORIGINS }}
+          ADMIN_USERNAME=${{ secrets.ADMIN_USERNAME }}
+          ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}
+          EOF
+
+      - name: Build images
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+        run: docker compose -f docker-compose.prod.yml build
+
+      - name: Deploy
+        run: docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+      - name: Wait for health checks
+        run: |
+          for i in $(seq 1 15); do
+            backend_ok=$(docker inspect -f '{{.State.Health.Status}}' kinderkreis-backend 2>/dev/null || echo "starting")
+            frontend_ok=$(docker inspect -f '{{.State.Health.Status}}' kinderkreis-frontend 2>/dev/null || echo "starting")
+            echo "backend=$backend_ok frontend=$frontend_ok"
+            if [ "$backend_ok" = "healthy" ] && [ "$frontend_ok" = "healthy" ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Containers did not become healthy in time"
+          docker compose -f docker-compose.prod.yml logs --tail=50
+          exit 1
+
+      - name: Clean up old images
+        if: always()
+        run: docker image prune -f
