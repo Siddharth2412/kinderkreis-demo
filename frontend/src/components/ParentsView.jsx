@@ -88,24 +88,30 @@ export default function ParentsView({ auth, onGoToLogin }) {
           </select>
         </div>
 
-        <div className="field checkbox">
-          <input
-            type="checkbox"
-            id="available"
-            checked={filters.available_only}
-            onChange={(e) => updateFilter("available_only", e.target.checked)}
-          />
-          <label htmlFor="available">Nur freie Plätze</label>
-        </div>
+        {/* Grouped in one wrapper so the two checkboxes move as a pair —
+            previously each was its own flex item, so the wider filter box
+            fit "Nur freie Plätze" onto row 1 next to the selects while "Nur
+            zertifiziert" wrapped alone onto row 2, splitting them apart. */}
+        <div className="filters-checks">
+          <div className="field checkbox">
+            <input
+              type="checkbox"
+              id="available"
+              checked={filters.available_only}
+              onChange={(e) => updateFilter("available_only", e.target.checked)}
+            />
+            <label htmlFor="available">Nur freie Plätze</label>
+          </div>
 
-        <div className="field checkbox">
-          <input
-            type="checkbox"
-            id="certified"
-            checked={filters.certified_only}
-            onChange={(e) => updateFilter("certified_only", e.target.checked)}
-          />
-          <label htmlFor="certified">Nur zertifiziert</label>
+          <div className="field checkbox">
+            <input
+              type="checkbox"
+              id="certified"
+              checked={filters.certified_only}
+              onChange={(e) => updateFilter("certified_only", e.target.checked)}
+            />
+            <label htmlFor="certified">Nur zertifiziert</label>
+          </div>
         </div>
       </div>
 
