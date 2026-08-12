@@ -23,4 +23,15 @@ FROM nginx:alpine AS production
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-EXPOSE 5173
+# Self-signed TLS cert, regenerated fresh on every image build (never
+# committed, never reused across deploys) — see nginx.conf for why: no
+# domain yet to get a real Let's Encrypt certificate for. 825 days is the
+# longest validity Apple/browsers still generally accept for a leaf cert.
+RUN apk add --no-cache openssl \
+    && mkdir -p /etc/nginx/ssl \
+    && openssl req -x509 -nodes -days 825 -newkey rsa:2048 \
+       -keyout /etc/nginx/ssl/selfsigned.key \
+       -out /etc/nginx/ssl/selfsigned.crt \
+       -subj "/CN=kinderkreis-demo"
+
+EXPOSE 5173 8443

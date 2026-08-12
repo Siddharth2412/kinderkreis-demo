@@ -8,11 +8,15 @@
 # What it does:
 #   1. Installs Docker Engine + the Compose plugin (docker compose v2).
 #   2. Adds the current user to the `docker` group.
-#   3. Opens only SSH (22) and HTTP (80) publicly via ufw. The backend API
-#      is never exposed directly — nginx (the frontend container) reverse-
-#      proxies /api/ to it over the internal Docker network (see
-#      frontend/nginx.conf), so no separate port needs opening, here or in
-#      any cloud-level security group in front of this VM.
+#   3. Opens only SSH (22), HTTP (80), and HTTPS (443) publicly via ufw.
+#      The backend API is never exposed directly — nginx (the frontend
+#      container) reverse-proxies /api/ to it over the internal Docker
+#      network (see frontend/nginx.conf), so no separate port needs
+#      opening, here or in any cloud-level security group in front of this
+#      VM. NOTE: if this VM sits behind a floating IP / cloud security
+#      group (common on OpenStack, Hetzner Cloud, etc.), 443 needs opening
+#      there too, separately from this ufw rule — ufw only controls the
+#      VM's own OS firewall, not that outer layer.
 #   4. Prints the next manual step: registering the GitHub Actions runner
 #      (requires a short-lived token from the GitHub UI, so it can't be
 #      scripted unattended).
@@ -42,6 +46,7 @@ sudo usermod -aG docker "$USER"
 echo "==> Configuring firewall (ufw)"
 sudo ufw allow OpenSSH
 sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
 sudo ufw --force enable
 sudo ufw status verbose
 

@@ -299,10 +299,13 @@ on the box).
 One-time VM setup:
 
 1. Provision a blank Ubuntu 22.04/24.04 VM and run `scripts/setup-vm.sh` on
-   it (installs Docker + the Compose plugin, opens ports 22/80/8000 via
-   `ufw`). It ends by printing the commands to register the box as a
-   self-hosted runner labeled `kinderkreis-prod` (needs a one-time token
-   from the GitHub UI, so that part can't be scripted unattended).
+   it (installs Docker + the Compose plugin, opens ports 22/80/443 via
+   `ufw`). If the VM sits behind a floating IP / cloud security group
+   (OpenStack, Hetzner Cloud, etc.), open 80 and 443 there too — that's a
+   separate layer `ufw` can't reach. It ends by printing the commands to
+   register the box as a self-hosted runner labeled `kinderkreis-prod`
+   (needs a one-time token from the GitHub UI, so that part can't be
+   scripted unattended).
 2. Add these repo secrets under **Settings → Secrets and variables →
    Actions**: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
    `FROM_EMAIL`, `FROM_NAME`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`,
@@ -313,19 +316,25 @@ One-time VM setup:
    `docker compose -f docker-compose.prod.yml up -d`, and waits for both
    containers' health checks before finishing.
 
-Only port 80 needs to be reachable from the internet — the frontend's nginx
-reverse-proxies `/api/*` to the backend container over Docker's internal
-network (`frontend/nginx.conf`), so the backend is never exposed directly
-and there's no separate port to open on the VM or in any cloud-level
-security group in front of it. The browser calls the API as same-origin
-relative paths (`VITE_API_URL` is baked in empty on purpose — see
-`frontend/src/api.js`), so there's no CORS to configure either;
+Only ports 80 and 443 need to be reachable from the internet — the
+frontend's nginx reverse-proxies `/api/*` to the backend container over
+Docker's internal network (`frontend/nginx.conf`), so the backend is never
+exposed directly and there's no separate port to open on the VM or in any
+cloud-level security group in front of it. The browser calls the API as
+same-origin relative paths (`VITE_API_URL` is baked in empty on purpose —
+see `frontend/src/api.js`), so there's no CORS to configure either;
 `ALLOWED_ORIGINS` mainly matters if you ever call the backend from a
 different origin.
 
-No domain/HTTPS is set up by this path — the app is served plain HTTP on
-the VM's public IP. Add a reverse proxy (Caddy, or extend the existing
-nginx config) with Let's Encrypt once you have a domain to point at it.
+**HTTPS**: nginx terminates TLS on 443 with a **self-signed** certificate,
+generated fresh at image build time (`frontend/Dockerfile`) — plain HTTP on
+80 redirects to it. No domain is needed for this, but browsers will show an
+untrusted-certificate warning visitors have to click through, since nothing
+outside this deploy vouches for the cert. Once you have a domain pointed at
+the VM's IP, swap this for a real Let's Encrypt certificate (e.g. via
+`certbot` or by fronting everything with Caddy instead) — worth asking for
+at that point, since it also unlocks HTTP/2 and removes the click-through
+warning.
 
 ## Next steps for a real product
 
