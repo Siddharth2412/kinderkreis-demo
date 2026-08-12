@@ -26,7 +26,7 @@ const STEPS = [
   },
 ];
 
-export default function LandingView({ onGoToLogin, onGoToSignup, onBrowseDirectory }) {
+export default function LandingView({ onGoToLogin, onGoToSignup }) {
   return (
     <div className="landing">
       <section className="landing-hero">
@@ -45,9 +45,6 @@ export default function LandingView({ onGoToLogin, onGoToSignup, onBrowseDirecto
             Anmelden
           </button>
         </div>
-        <button className="link-btn landing-browse" onClick={onBrowseDirectory}>
-          Oder direkt Betreuungsangebote ansehen →
-        </button>
       </section>
 
       <section className="landing-section">

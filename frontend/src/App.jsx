@@ -93,17 +93,20 @@ export default function App() {
     setView("home");
   }
 
-  // The directory (Für Eltern) is reachable by everyone — logged out,
-  // eltern, or tagespflege — but is no longer the default: logged-out
-  // visitors land on the landing page (view "landing") first and have to
-  // either log in or explicitly choose to browse (LandingView's
-  // onBrowseDirectory sets view to "home").
+  // The directory (Für Eltern) now requires a session — eltern or
+  // tagespflege, either works — logged-out visitors only ever see the
+  // landing page and have to log in or register first. `!!auth` is the
+  // load-bearing check here, not just "not one of the other views": with
+  // it gone, any bug that leaves `view` on something unexpected (or a
+  // stale localStorage session that fails to load) would fall through to
+  // showing the directory to a logged-out visitor.
   const showLanding = view === "landing";
   const showProfile = view === "profile" && auth?.role === "tagespflege";
   const showMyBookings = view === "bookings" && auth?.role === "eltern";
   const showProviderBookings = view === "provider-bookings" && auth?.role === "tagespflege";
   const showAdmin = view === "admin";
   const showDirectory =
+    !!auth &&
     !showLanding &&
     !AUTH_VIEWS.includes(view) &&
     !showProfile &&
@@ -182,7 +185,6 @@ export default function App() {
           <LandingView
             onGoToLogin={() => setView("login")}
             onGoToSignup={() => setView("signup")}
-            onBrowseDirectory={() => setView("home")}
           />
         )}
         {showDirectory && <ParentsView auth={auth} onGoToLogin={() => setView("login")} />}

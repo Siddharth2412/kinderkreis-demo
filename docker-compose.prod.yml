@@ -22,6 +22,15 @@ services:
       - "127.0.0.1:8000:8000"
     env_file:
       - .env
+    volumes:
+      # Named volume, not a bind mount: survives `docker compose build` +
+      # `up -d` recreating the container on every deploy (only `down -v` or
+      # `docker volume rm` would remove it). /app/app/data is where db.py's
+      # DEFAULT_DB_PATH and CERTIFICATES_DIR resolve to inside the image
+      # (WORKDIR /app, `COPY app ./app`) — without this mount, the SQLite
+      # DB and uploaded certificates lived in the old container's writable
+      # layer and vanished the moment that container was replaced.
+      - backend_data:/app/app/data
     mem_limit: 300m
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
@@ -54,3 +63,6 @@ services:
       retries: 3
       start_period: 5s
     restart: unless-stopped
+
+volumes:
+  backend_data:
