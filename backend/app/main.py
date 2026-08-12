@@ -146,8 +146,13 @@ def _send_email(
     port = int(os.environ.get("SMTP_PORT", "587"))
     username = os.environ.get("SMTP_USERNAME", "")
     password = os.environ.get("SMTP_PASSWORD", "")
-    from_email = os.environ.get("FROM_EMAIL", username or "hello@kinderkreis.demo")
-    from_name = os.environ.get("FROM_NAME", "Kinderkreis")
+    # `or`, not the dict-style default arg: `.get(key, default)` only falls
+    # back when the var is missing entirely, not when it's set-but-empty —
+    # which is exactly what happens when a GitHub Actions secret is unset
+    # but the deploy workflow still writes `FROM_NAME=` into .env. That
+    # used to produce a blank "<> <email>" From header.
+    from_email = os.environ.get("FROM_EMAIL") or username or "hello@kinderkreis.demo"
+    from_name = os.environ.get("FROM_NAME") or "Kinderkreis"
 
     msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
