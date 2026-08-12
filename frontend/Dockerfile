@@ -23,11 +23,4 @@ FROM nginx:alpine AS production
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# The self-signed TLS cert (nginx.conf's ssl_certificate/ssl_certificate_key)
-# is generated once on the VM by scripts/setup-vm.sh and bind-mounted in at
-# /etc/nginx/ssl via docker-compose.prod.yml — not baked into the image here.
-# That's both faster to build (no apk install + keygen on every deploy) and
-# keeps the cert's fingerprint stable across deploys, so browsers don't make
-# you re-accept the untrusted-cert warning after every single push.
-
-EXPOSE 5173 8443
+EXPOSE 5173

@@ -8,28 +8,23 @@
 # What it does:
 #   1. Installs Docker Engine + the Compose plugin (docker compose v2).
 #   2. Adds the current user to the `docker` group.
-#   3. Opens only SSH (22), HTTP (80), and HTTPS (443) publicly via ufw.
-#      The backend API is never exposed directly — nginx (the frontend
-#      container) reverse-proxies /api/ to it over the internal Docker
-#      network (see frontend/nginx.conf), so no separate port needs
-#      opening, here or in any cloud-level security group in front of this
-#      VM. NOTE: if this VM sits behind a floating IP / cloud security
-#      group (common on OpenStack, Hetzner Cloud, etc.), 443 needs opening
-#      there too, separately from this ufw rule — ufw only controls the
-#      VM's own OS firewall, not that outer layer.
-#   4. Generates a self-signed TLS cert (once — skipped if it already
-#      exists) at /etc/kinderkreis/ssl, bind-mounted into the frontend
-#      container by docker-compose.prod.yml. No domain yet to get a real
-#      Let's Encrypt certificate for; see README "Deploying to production"
-#      for upgrading this once there is one.
-#   5. Prints the next manual step: registering the GitHub Actions runner
+#   3. Opens only SSH (22) and HTTP (80) publicly via ufw. The backend API
+#      is never exposed directly — nginx (the frontend container) reverse-
+#      proxies /api/ to it over the internal Docker network (see
+#      frontend/nginx.conf), so no separate port needs opening, here or in
+#      any cloud-level security group in front of this VM.
+#   4. Prints the next manual step: registering the GitHub Actions runner
 #      (requires a short-lived token from the GitHub UI, so it can't be
 #      scripted unattended).
+#
+# Plain HTTP only, on purpose — no TLS/self-signed cert here. Once there's
+# a domain pointed at this VM, that's the point to add real HTTPS (e.g. via
+# Caddy or certbot), not before.
 set -euo pipefail
 
 echo "==> Updating apt and installing prerequisites"
 sudo apt-get update
-sudo apt-get install -y ca-certificates curl gnupg ufw openssl
+sudo apt-get install -y ca-certificates curl gnupg ufw
 
 echo "==> Installing Docker Engine + Compose plugin"
 if ! command -v docker >/dev/null 2>&1; then
@@ -51,25 +46,8 @@ sudo usermod -aG docker "$USER"
 echo "==> Configuring firewall (ufw)"
 sudo ufw allow OpenSSH
 sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
 sudo ufw --force enable
 sudo ufw status verbose
-
-echo "==> Generating self-signed TLS cert (skipped if already present)"
-if [ ! -f /etc/kinderkreis/ssl/selfsigned.crt ]; then
-  sudo mkdir -p /etc/kinderkreis/ssl
-  sudo openssl req -x509 -nodes -days 825 -newkey rsa:2048 \
-    -keyout /etc/kinderkreis/ssl/selfsigned.key \
-    -out /etc/kinderkreis/ssl/selfsigned.crt \
-    -subj "/CN=kinderkreis-demo"
-  # World-readable: nginx runs as its own user *inside* the container, whose
-  # uid won't match anything on the host, so it needs "other" read access to
-  # see these through the bind mount. Not a real secrecy concern for a
-  # self-signed cert either way.
-  sudo chmod 644 /etc/kinderkreis/ssl/selfsigned.key /etc/kinderkreis/ssl/selfsigned.crt
-else
-  echo "    /etc/kinderkreis/ssl/selfsigned.crt already exists, skipping"
-fi
 
 cat <<'EOF'
 
