@@ -53,6 +53,11 @@ services:
     ports:
       - "80:5173"
       - "443:8443"
+    volumes:
+      # Self-signed cert generated once on the VM by scripts/setup-vm.sh
+      # (see frontend/Dockerfile for why it's not baked into the image).
+      # :ro since nginx only ever needs to read it.
+      - /etc/kinderkreis/ssl:/etc/nginx/ssl:ro
     depends_on:
       backend:
         condition: service_healthy

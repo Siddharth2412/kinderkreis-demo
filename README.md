@@ -326,15 +326,21 @@ see `frontend/src/api.js`), so there's no CORS to configure either;
 `ALLOWED_ORIGINS` mainly matters if you ever call the backend from a
 different origin.
 
-**HTTPS**: nginx terminates TLS on 443 with a **self-signed** certificate,
-generated fresh at image build time (`frontend/Dockerfile`) — plain HTTP on
-80 redirects to it. No domain is needed for this, but browsers will show an
-untrusted-certificate warning visitors have to click through, since nothing
-outside this deploy vouches for the cert. Once you have a domain pointed at
-the VM's IP, swap this for a real Let's Encrypt certificate (e.g. via
-`certbot` or by fronting everything with Caddy instead) — worth asking for
-at that point, since it also unlocks HTTP/2 and removes the click-through
-warning.
+**HTTPS**: nginx terminates TLS on 443 with a **self-signed** certificate —
+plain HTTP on 80 redirects to it. `scripts/setup-vm.sh` generates the cert
+once on the VM itself, at `/etc/kinderkreis/ssl` (skipped if it's already
+there), and `docker-compose.prod.yml` bind-mounts it into the frontend
+container; it's deliberately *not* baked into the image, so builds stay
+fast and the cert's fingerprint stays stable across deploys — regenerating
+it on every build would mean re-baking OpenSSL into the image each time and
+would make browsers ask visitors to re-accept the warning after every
+single push. No domain is needed for a self-signed cert, but browsers will
+still show an untrusted-certificate warning visitors have to click through,
+since nothing outside this deploy vouches for it. Once you have a domain
+pointed at the VM's IP, swap this for a real Let's Encrypt certificate
+(e.g. via `certbot` or by fronting everything with Caddy instead) — worth
+asking for at that point, since it also unlocks HTTP/2 and removes the
+click-through warning.
 
 ## Next steps for a real product
 
