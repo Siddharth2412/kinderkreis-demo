@@ -52,6 +52,41 @@ export const updateMyProvider = (token, payload) =>
     body: JSON.stringify(payload),
   });
 
+// Certificate (Qualifikationsnachweis) upload for the Tagespflegeperson's own
+// profile. Multipart, so upload/download skip the shared JSON `request()`
+// helper — download in particular needs the raw response to read the file
+// name back out of the Content-Disposition header.
+export const uploadMyCertificate = async (token, file) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch(`${BASE_URL}/api/providers/me/certificate`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: formData,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(typeof body.detail === "string" ? body.detail : `Anfrage fehlgeschlagen (${res.status})`);
+  }
+  return res.json();
+};
+
+export const deleteMyCertificate = (token) =>
+  request("/api/providers/me/certificate", { method: "DELETE", headers: authHeaders(token) });
+
+// Fetches the stored certificate as a blob (the endpoint requires the same
+// Bearer token as everything else, so a plain <a href> can't reach it) plus
+// the original filename, for the caller to turn into a download link.
+export const fetchMyCertificateBlob = async (token) => {
+  const res = await fetch(`${BASE_URL}/api/providers/me/certificate`, { headers: authHeaders(token) });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(typeof body.detail === "string" ? body.detail : `Anfrage fehlgeschlagen (${res.status})`);
+  }
+  const match = (res.headers.get("Content-Disposition") || "").match(/filename="?([^";]+)"?/);
+  return { blob: await res.blob(), filename: match ? match[1] : "zertifikat" };
+};
+
 export const loginUser = (email, password) =>
   request("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
 

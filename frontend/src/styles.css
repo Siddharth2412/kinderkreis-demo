@@ -144,6 +144,13 @@ main{ padding: 40px 0 90px; }
   font-size: 0.85rem; margin-bottom: 24px;
 }
 
+/* Certificate upload (own profile only) */
+.certificate-card{ margin-top:24px; }
+.certificate-hint{ margin-top:4px; margin-bottom:18px; }
+.certificate-status{ margin-bottom:18px; }
+.certificate-actions{ margin-top:0; flex-wrap:wrap; }
+.certificate-note{ margin-top:24px; margin-bottom:0; }
+
 footer{ padding: 40px 0; border-top:1px solid var(--line); text-align:center; color: var(--sage-light); font-size:0.82rem; }
 
 /* Auth (login / signup) */

@@ -4,4 +4,4 @@ __pycache__/
 node_modules/
 dist/
 .claude
-backend/app/data/*.db
+backend/app/data/*

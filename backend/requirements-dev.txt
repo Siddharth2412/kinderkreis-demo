@@ -1,0 +1,5 @@
+# Test-only dependencies, kept separate from requirements.txt so the
+# production image (backend/Dockerfile) never installs them.
+-r requirements.txt
+pytest==9.1.1
+httpx==0.28.1

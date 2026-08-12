@@ -71,6 +71,15 @@ class Provider(ProviderBase):
     # Email of the Tagespflegeperson account that owns this listing, if any
     # (seed/legacy profiles have no owner). Never exposed in the public API.
     owner_email: Optional[str] = None
+    # Uploaded Qualifikationsnachweis (certificate) metadata. Deliberately not
+    # part of ProviderBase/ProviderCreate: it's written only by the dedicated
+    # certificate endpoints (POST/DELETE .../me/certificate), never by saving
+    # the profile form — see db._migrate_providers_table for why. The raw
+    # fields are never exposed publicly, only the has_certificate flag.
+    certificate_filename: Optional[str] = None
+    certificate_original_name: Optional[str] = None
+    certificate_content_type: Optional[str] = None
+    certificate_uploaded_at: Optional[str] = None
 
     @property
     def is_certified(self) -> bool:
@@ -81,14 +90,24 @@ class Provider(ProviderBase):
     def free_places(self) -> int:
         return self.capacity_total - self.capacity_used
 
+    @property
+    def has_certificate(self) -> bool:
+        return self.certificate_filename is not None
+
     def to_public_dict(self) -> dict:
-        data = self.model_dump(exclude={"owner_email"})
+        data = self.model_dump(exclude={
+            "owner_email", "certificate_filename", "certificate_original_name",
+            "certificate_content_type", "certificate_uploaded_at",
+        })
         data["is_certified"] = self.is_certified
         data["free_places"] = self.free_places
         # Never exposes owner_email itself, but the UI needs to know whether a
         # booking request is even possible (only account-linked profiles have
         # someone able to confirm one).
         data["is_bookable"] = self.owner_email is not None
+        # Whether a Qualifikationsnachweis has been uploaded — the file itself
+        # stays private to the owning account (see certificate endpoints).
+        data["has_certificate"] = self.has_certificate
         return data
 
 

@@ -1,5 +1,15 @@
-import { useEffect, useState } from "react";
-import { fetchMyProvider, createMyProvider, updateMyProvider } from "../api.js";
+import { useEffect, useRef, useState } from "react";
+import {
+  fetchMyProvider,
+  createMyProvider,
+  updateMyProvider,
+  uploadMyCertificate,
+  deleteMyCertificate,
+  fetchMyCertificateBlob,
+} from "../api.js";
+
+const ALLOWED_CERTIFICATE_TYPES = ["application/pdf", "image/jpeg", "image/png"];
+const MAX_CERTIFICATE_BYTES = 5 * 1024 * 1024; // matches the backend's CERTIFICATE_MAX_BYTES
 
 const INITIAL = {
   name: "",
@@ -33,6 +43,12 @@ export default function ProfileView({ token }) {
   const [success, setSuccess] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
+  const [hasCertificate, setHasCertificate] = useState(false);
+  const [certBusy, setCertBusy] = useState(false);
+  const [certError, setCertError] = useState(null);
+  const [certSuccess, setCertSuccess] = useState(null);
+  const certInputRef = useRef(null);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -40,9 +56,10 @@ export default function ProfileView({ token }) {
       .then(({ provider }) => {
         if (cancelled) return;
         if (provider) {
-          const { is_certified, free_places, id, ...editable } = provider;
+          const { is_certified, free_places, id, has_certificate, ...editable } = provider;
           setForm(editable);
           setMode("edit");
+          setHasCertificate(has_certificate);
         } else {
           setMode("create");
         }
@@ -93,9 +110,10 @@ export default function ProfileView({ token }) {
       };
       const saved =
         mode === "edit" ? await updateMyProvider(token, payload) : await createMyProvider(token, payload);
-      const { is_certified, free_places, id, ...editable } = saved;
+      const { is_certified, free_places, id, has_certificate, ...editable } = saved;
       setForm(editable);
       setMode("edit");
+      setHasCertificate(has_certificate);
       setSuccess(
         mode === "edit"
           ? "Ihre Änderungen wurden gespeichert."
@@ -105,6 +123,66 @@ export default function ProfileView({ token }) {
       setError(err.message);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleCertificateSelect(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // reset so re-selecting the same file still fires onChange
+    if (!file) return;
+
+    setCertError(null);
+    setCertSuccess(null);
+    if (!ALLOWED_CERTIFICATE_TYPES.includes(file.type)) {
+      setCertError("Bitte nur PDF-, JPG- oder PNG-Dateien hochladen.");
+      return;
+    }
+    if (file.size > MAX_CERTIFICATE_BYTES) {
+      setCertError("Die Datei ist zu groß (maximal 5 MB).");
+      return;
+    }
+
+    setCertBusy(true);
+    try {
+      const saved = await uploadMyCertificate(token, file);
+      setHasCertificate(saved.has_certificate);
+      setCertSuccess("Zertifikat wurde hochgeladen.");
+    } catch (err) {
+      setCertError(err.message);
+    } finally {
+      setCertBusy(false);
+    }
+  }
+
+  async function handleCertificateView() {
+    setCertError(null);
+    try {
+      const { blob, filename } = await fetchMyCertificateBlob(token);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (err) {
+      setCertError(err.message);
+    }
+  }
+
+  async function handleCertificateDelete() {
+    setCertError(null);
+    setCertSuccess(null);
+    setCertBusy(true);
+    try {
+      const saved = await deleteMyCertificate(token);
+      setHasCertificate(saved.has_certificate);
+      setCertSuccess("Zertifikat wurde entfernt.");
+    } catch (err) {
+      setCertError(err.message);
+    } finally {
+      setCertBusy(false);
     }
   }
 
@@ -320,6 +398,59 @@ export default function ProfileView({ token }) {
           </button>
         </div>
       </form>
+
+      {mode === "edit" ? (
+        <div className="register-card certificate-card">
+          <h3>Qualifikationsnachweis</h3>
+          <p className="form-hint certificate-hint">
+            Laden Sie einen Nachweis Ihrer QHB-Qualifikation oder Pflegeerlaubnis hoch (PDF, JPG oder PNG, max. 5
+            MB). Die Datei ist nur für Sie sichtbar — Eltern sehen lediglich, dass ein Nachweis hinterlegt wurde.
+          </p>
+
+          {certError && <div className="form-error">{certError}</div>}
+          {certSuccess && <div className="form-success">{certSuccess}</div>}
+
+          <div className="badge-row certificate-status">
+            {hasCertificate ? (
+              <span className="badge">Zertifikat hochgeladen</span>
+            ) : (
+              <span className="badge muted">Kein Zertifikat hochgeladen</span>
+            )}
+          </div>
+
+          <input
+            ref={certInputRef}
+            type="file"
+            accept="application/pdf,image/jpeg,image/png"
+            onChange={handleCertificateSelect}
+            hidden
+          />
+          <div className="form-actions certificate-actions">
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={certBusy}
+              onClick={() => certInputRef.current?.click()}
+            >
+              {certBusy ? "Wird hochgeladen …" : hasCertificate ? "Zertifikat ersetzen" : "Zertifikat hochladen"}
+            </button>
+            {hasCertificate && (
+              <>
+                <button type="button" className="btn-ghost" disabled={certBusy} onClick={handleCertificateView}>
+                  Ansehen
+                </button>
+                <button type="button" className="btn-ghost" disabled={certBusy} onClick={handleCertificateDelete}>
+                  Entfernen
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="rules-note certificate-note">
+          Sobald Ihr Profil veröffentlicht ist, können Sie hier einen Qualifikationsnachweis hochladen.
+        </div>
+      )}
     </div>
   );
 }

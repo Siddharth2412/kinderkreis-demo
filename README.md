@@ -56,7 +56,9 @@ resource-constrained.
   real workflow — e.g. it rejects a solo Kindertagespflege profile with
   capacity above 5, or a group profile with only 1 staff member — and
   returns a clear error if a rule is broken. Each account maps to at most
-  one provider profile.
+  one provider profile. Once a profile exists, its owner can also upload a
+  Qualifikationsnachweis (PDF/JPG/PNG, ≤5MB) — the file itself is private to
+  that account; the public directory only shows whether one was uploaded.
 - **Buchungsanfrage** (from a provider's detail modal, `eltern` accounts
   only): send a booking request — child's name/age, desired date and
   start/end hour, the parent's address and phone number, an optional
@@ -98,6 +100,9 @@ can't receive booking requests until claimed by a `tagespflege` signup.
 | GET    | `/api/providers/me`                | 🔒🧑‍🍼 Own profile, or `{"provider": null}` if none yet |
 | POST   | `/api/providers/me`                | 🔒🧑‍🍼 Create own profile (409 if one already exists) |
 | PUT    | `/api/providers/me`                | 🔒🧑‍🍼 Update own profile                  |
+| POST   | `/api/providers/me/certificate`    | 🔒🧑‍🍼 Upload/replace your Qualifikationsnachweis (PDF/JPG/PNG, ≤5MB) |
+| GET    | `/api/providers/me/certificate`    | 🔒🧑‍🍼 Download your own uploaded certificate |
+| DELETE | `/api/providers/me/certificate`    | 🔒🧑‍🍼 Remove your uploaded certificate     |
 | POST   | `/api/auth/register`               | Create a user account (sends verification OTP) |
 | POST   | `/api/auth/login`                  | Log in, returns a session token           |
 | POST   | `/api/auth/logout`                 | Invalidate a session token                |
@@ -127,14 +132,24 @@ kinderkreis-demo/
 ├── backend/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   └── app/
-│       ├── main.py       # FastAPI routes
-│       ├── models.py     # Pydantic models + regulatory validation rules
-│       ├── data.py       # Provider seed data (inserted once into SQLite)
-│       ├── db.py         # SQLite persistence for users/sessions/OTPs/providers/bookings/notifications
-│       ├── calendar_invite.py  # builds the .ics attached to booking-confirmation emails
-│       └── data/
-│           └── kinderkreis.db  # created on first run, gitignored
+│   ├── requirements-dev.txt  # + pytest/httpx, for running tests/ (never baked into the image)
+│   ├── pytest.ini
+│   ├── app/
+│   │   ├── main.py       # FastAPI routes
+│   │   ├── models.py     # Pydantic models + regulatory validation rules
+│   │   ├── data.py       # Provider seed data (inserted once into SQLite)
+│   │   ├── db.py         # SQLite persistence for users/sessions/OTPs/providers/bookings/notifications
+│   │   ├── calendar_invite.py  # builds the .ics attached to booking-confirmation emails
+│   │   └── data/
+│   │       ├── kinderkreis.db  # created on first run, gitignored
+│   │       └── certificates/   # uploaded Qualifikationsnachweis files, gitignored
+│   └── tests/             # pytest suite — see tests/README.md
+│       ├── conftest.py    # fresh SQLite DB + certificate folder per test
+│       ├── test_auth.py
+│       ├── test_providers.py
+│       ├── test_certificates.py
+│       ├── test_bookings.py
+│       └── test_notifications.py
 └── frontend/
     ├── Dockerfile      # multi-stage: build the bundle, then serve it via nginx
     ├── nginx.conf      # static-file serving config for the production image
@@ -176,6 +191,20 @@ cd frontend
 npm install
 npm run dev
 ```
+
+## Tests
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest
+```
+
+84 tests covering auth, the provider directory + regulatory validation
+rules, certificate upload/download/delete, bookings, and notifications. Each
+test runs against its own throwaway SQLite DB and certificate folder, so the
+suite never touches `app/data/kinderkreis.db` — see `backend/tests/README.md`
+for the breakdown.
 
 ## Deploying to production
 
@@ -224,5 +253,7 @@ the `docker build` command above by hand each time.
 - Add messaging between parents and providers, and let a provider account
   see which parents viewed/contacted them.
 - Verify Pflegeerlaubnis and qualification claims against Jugendamt records
-  rather than trusting self-reported form data.
-- Add file upload for certificates and photos.
+  rather than trusting self-reported form data — including the uploaded
+  Qualifikationsnachweis (currently just stored, never reviewed/approved by
+  anyone).
+- Add photo upload for provider profiles (certificate upload already exists).

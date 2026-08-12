@@ -1,7 +1,9 @@
 __pycache__
 *.pyc
 .venv
-# Never bake a local dev database into the image — it's meant to live only
-# in the bind-mounted app/data volume (see docker-compose.yml), and would
-# otherwise ship real user data if this image were ever pushed anywhere.
+# Never bake a local dev database (or uploaded certificates) into the image —
+# they're meant to live only in the bind-mounted app/data volume (see
+# docker-compose.yml), and would otherwise ship real user data if this image
+# were ever pushed anywhere.
 app/data/*.db
+app/data/certificates/

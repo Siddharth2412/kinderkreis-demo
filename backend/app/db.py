@@ -22,6 +22,11 @@ from typing import Iterator, Optional, TypedDict
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "kinderkreis.db"
 DB_PATH = Path(os.environ.get("KINDERKREIS_DB_PATH", DEFAULT_DB_PATH))
 
+# Uploaded Qualifikationsnachweis files (PDF/JPG/PNG) live next to the DB file,
+# inside the same bind-mounted app/data/ directory — so, like the SQLite file,
+# they survive `docker compose up --build` redeploys, not just restarts.
+CERTIFICATES_DIR = DB_PATH.parent / "certificates"
+
 # How long a connection waits on a lock held by a concurrent writer before
 # giving up (SQLite serializes writers; FastAPI's sync `def` routes run
 # concurrently in a thread pool, so without this, one request writing —
@@ -79,6 +84,24 @@ def _migrate_bookings_table(conn: sqlite3.Connection) -> None:
     for name, col_type in new_columns.items():
         if name not in existing:
             conn.execute(f"ALTER TABLE bookings ADD COLUMN {name} {col_type}")
+
+
+def _migrate_providers_table(conn: sqlite3.Connection) -> None:
+    """Certificate columns added after `providers` already existed on someone's
+    machine — same ALTER TABLE approach as _migrate_bookings_table. Kept out of
+    _PROVIDER_FIELDS (which drives the generic profile-form insert/update) since
+    these are only ever written by the dedicated certificate endpoints, never by
+    saving the profile form."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(providers)")}
+    new_columns = {
+        "certificate_filename": "TEXT",
+        "certificate_original_name": "TEXT",
+        "certificate_content_type": "TEXT",
+        "certificate_uploaded_at": "TEXT",
+    }
+    for name, col_type in new_columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE providers ADD COLUMN {name} {col_type}")
 
 
 def init_db() -> None:
@@ -168,6 +191,7 @@ def init_db() -> None:
             )
             """
         )
+        _migrate_providers_table(conn)
 
 
 # ---------------------------------------------------------------------------
@@ -274,11 +298,18 @@ _PROVIDER_FIELDS = (
     "has_pflegeerlaubnis", "bio", "phone", "contact_email", "website", "owner_email",
 )
 
+_CERTIFICATE_FIELDS = (
+    "certificate_filename", "certificate_original_name",
+    "certificate_content_type", "certificate_uploaded_at",
+)
+
 
 def _row_to_provider_dict(row: sqlite3.Row) -> dict:
     data = {field: row[field] for field in _PROVIDER_FIELDS}
     data["id"] = row["id"]
     data["has_pflegeerlaubnis"] = bool(row["has_pflegeerlaubnis"])
+    for field in _CERTIFICATE_FIELDS:
+        data[field] = row[field]
     return data
 
 
@@ -351,6 +382,37 @@ def list_cities() -> list[str]:
     with _connect() as conn:
         rows = conn.execute("SELECT DISTINCT city FROM providers ORDER BY city").fetchall()
     return [row["city"] for row in rows]
+
+
+def set_provider_certificate(
+    provider_id: int, filename: str, original_name: str, content_type: str, uploaded_at: str
+) -> None:
+    """Record the on-disk filename (under CERTIFICATES_DIR) plus display
+    metadata for a provider's uploaded Qualifikationsnachweis. The endpoint
+    layer is responsible for actually writing/removing the file bytes."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE providers
+            SET certificate_filename = ?, certificate_original_name = ?,
+                certificate_content_type = ?, certificate_uploaded_at = ?
+            WHERE id = ?
+            """,
+            (filename, original_name, content_type, uploaded_at, provider_id),
+        )
+
+
+def clear_provider_certificate(provider_id: int) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE providers
+            SET certificate_filename = NULL, certificate_original_name = NULL,
+                certificate_content_type = NULL, certificate_uploaded_at = NULL
+            WHERE id = ?
+            """,
+            (provider_id,),
+        )
 
 
 # ---------------------------------------------------------------------------

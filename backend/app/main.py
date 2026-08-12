@@ -14,8 +14,9 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from app import db
@@ -58,6 +59,19 @@ app.add_middleware(
 
 db.init_db()
 db.seed_providers_if_empty([p.model_dump() for p in SEED_PROVIDERS])  # only runs on a fresh DB
+db.CERTIFICATES_DIR.mkdir(parents=True, exist_ok=True)
+
+# Qualifikationsnachweis (certificate) upload limits: content-type sniffed
+# from the browser's Content-Type header (not re-derived from file bytes —
+# fine for this demo, an authenticated user attacking their own upload isn't
+# a threat model here) maps to a fixed on-disk extension, and a size cap
+# keeps someone from parking a huge file on the server's disk.
+CERTIFICATE_CONTENT_TYPES = {
+    "application/pdf": ".pdf",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+}
+CERTIFICATE_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
 
 
 def _load_providers() -> dict[int, Provider]:
@@ -463,6 +477,78 @@ def update_capacity(provider_id: int, capacity_used: int = Query(..., ge=0)):
     db.update_provider_capacity(provider_id, capacity_used)
     updated = provider.model_copy(update={"capacity_used": capacity_used})
     return updated.to_public_dict()
+
+
+# ---------------------------------------------------------------------------
+# Certificate (Qualifikationsnachweis) upload
+#
+# One file per provider profile, always stored as "<provider_id><ext>" so a
+# re-upload naturally replaces the previous one. Only the owning
+# Tagespflegeperson can upload, view, or delete it — the public directory
+# only ever sees the has_certificate flag (see Provider.to_public_dict).
+# ---------------------------------------------------------------------------
+
+@app.post("/api/providers/me/certificate")
+async def upload_my_certificate(file: UploadFile = File(...), user: dict = Depends(_current_user)):
+    _require_tagespflege(user)
+    provider_row = db.get_provider_by_owner(user["email"])
+    if not provider_row:
+        raise HTTPException(404, "Bitte legen Sie zuerst Ihr Profil an, bevor Sie ein Zertifikat hochladen.")
+
+    ext = CERTIFICATE_CONTENT_TYPES.get(file.content_type)
+    if not ext:
+        raise HTTPException(415, "Nur PDF-, JPG- oder PNG-Dateien werden akzeptiert.")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(422, "Die Datei ist leer.")
+    if len(content) > CERTIFICATE_MAX_BYTES:
+        raise HTTPException(413, "Die Datei ist zu groß (maximal 5 MB).")
+
+    provider_id = provider_row["id"]
+    # Drop any previous file first — if the extension changed (e.g. a PDF
+    # re-uploaded as a JPG) the new filename below wouldn't otherwise
+    # overwrite it, leaving an orphaned file behind.
+    old_filename = provider_row.get("certificate_filename")
+    if old_filename:
+        (db.CERTIFICATES_DIR / old_filename).unlink(missing_ok=True)
+
+    filename = f"{provider_id}{ext}"
+    (db.CERTIFICATES_DIR / filename).write_bytes(content)
+    db.set_provider_certificate(
+        provider_id, filename, file.filename or filename, file.content_type, datetime.utcnow().isoformat()
+    )
+    return Provider(**db.get_provider(provider_id)).to_public_dict()
+
+
+@app.get("/api/providers/me/certificate")
+def download_my_certificate(user: dict = Depends(_current_user)):
+    _require_tagespflege(user)
+    provider_row = db.get_provider_by_owner(user["email"])
+    filename = provider_row.get("certificate_filename") if provider_row else None
+    if not filename:
+        raise HTTPException(404, "Kein Zertifikat hinterlegt")
+    path = db.CERTIFICATES_DIR / filename
+    if not path.exists():
+        raise HTTPException(404, "Zertifikatsdatei nicht gefunden")
+    return FileResponse(
+        path,
+        media_type=provider_row["certificate_content_type"] or "application/octet-stream",
+        filename=provider_row["certificate_original_name"] or filename,
+    )
+
+
+@app.delete("/api/providers/me/certificate")
+def delete_my_certificate(user: dict = Depends(_current_user)):
+    _require_tagespflege(user)
+    provider_row = db.get_provider_by_owner(user["email"])
+    if not provider_row:
+        raise HTTPException(404, "Kein Profil gefunden")
+    filename = provider_row.get("certificate_filename")
+    if filename:
+        (db.CERTIFICATES_DIR / filename).unlink(missing_ok=True)
+        db.clear_provider_certificate(provider_row["id"])
+    return Provider(**db.get_provider(provider_row["id"])).to_public_dict()
 
 
 # ---------------------------------------------------------------------------
