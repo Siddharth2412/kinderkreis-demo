@@ -34,10 +34,10 @@ jobs:
       group: ci-test-${{ github.ref }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11" # matches backend/Dockerfile's python:3.11-slim
           cache: pip
@@ -52,7 +52,7 @@ jobs:
         run: pytest
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "20" # matches frontend/Dockerfile's node:20-slim
           cache: npm
@@ -77,7 +77,7 @@ jobs:
       group: deploy-prod
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Written fresh on every deploy from GitHub Secrets rather than kept
       # as a standing file on the VM, so rotating a secret in GitHub is
