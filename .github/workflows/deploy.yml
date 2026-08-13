@@ -1,21 +1,81 @@
-name: Deploy to VM
+name: CI/CD
 
-# Runs on the self-hosted runner installed on the production VM (see
-# scripts/setup-vm.sh). Every push to main rebuilds and redeploys both
-# containers via docker-compose.prod.yml. Trigger manually from the Actions
-# tab with "Run workflow" too.
+# Runs entirely on the self-hosted runner installed on the production VM
+# (see scripts/setup-vm.sh) — there's only one runner, labeled
+# kinderkreis-prod, and it doubles as both the CI executor and the deploy
+# target.
+#
+#   test   - backend pytest suite + frontend production build. Runs on
+#            every push and every pull request targeting main, so a broken
+#            build/test never reaches the deploy step.
+#   deploy - builds and redeploys both containers via
+#            docker-compose.prod.yml. Runs only on pushes to main (or
+#            manual dispatch), and only once `test` has passed.
+#
+# Security note: because this is a self-hosted runner, `test` runs on PRs
+# execute on the same box that later deploys to prod. That's fine as long
+# as only trusted collaborators can open PRs here — if this repo ever goes
+# public, drop the `pull_request` trigger (or gate it behind manual
+# approval) so an untrusted PR can't run arbitrary code on the deploy box.
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
-concurrency:
-  group: deploy-prod
-  cancel-in-progress: false
-
 jobs:
-  deploy:
+  test:
+    name: Test
     runs-on: [self-hosted, linux, kinderkreis-prod]
+    # Safe to cancel a stale test run when new commits land on the same
+    # branch/PR — unlike deploy, nothing here is destructive mid-flight.
+    concurrency:
+      group: ci-test-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11" # matches backend/Dockerfile's python:3.11-slim
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+
+      - name: Run backend tests
+        working-directory: backend
+        run: pytest
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20" # matches frontend/Dockerfile's node:20-slim
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+  deploy:
+    name: Deploy
+    needs: test
+    # Only deploy on a real push to main (or manual dispatch) - never for
+    # pull_request events, even though they also run the test job above.
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, linux, kinderkreis-prod]
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 

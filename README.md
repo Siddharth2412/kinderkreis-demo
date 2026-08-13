@@ -288,13 +288,20 @@ of a few hundred — instead of running `npm run dev`. A few things to know:
 
 ## CI/CD: deploying to a VM via GitHub Actions
 
-`docker-compose.prod.yml` is the lean deploy-time compose file (production
-target + backend without the live-source mount + `mem_limit` guard rails)
-referenced above, and `.github/workflows/deploy.yml` builds and redeploys it
-automatically on every push to `main`, via a **self-hosted GitHub Actions
-runner** installed on the VM itself (not GitHub-hosted runners — the runner
-needs to *be* the deploy target, since it runs `docker compose up` directly
-on the box).
+`.github/workflows/deploy.yml` is a two-job pipeline that runs entirely on a
+**self-hosted GitHub Actions runner** installed on the VM itself (not
+GitHub-hosted runners — the runner needs to *be* the deploy target, since it
+runs `docker compose up` directly on the box):
+
+- **`test`** — runs on every push and every pull request targeting `main`:
+  the backend `pytest` suite, then `npm run build` for the frontend (there's
+  no frontend test suite yet, so the build itself is the check). Nothing
+  gets deployed if this fails.
+- **`deploy`** — runs only after `test` passes, and only for a real push to
+  `main` (or manual dispatch from the Actions tab), never for pull
+  requests. Builds `docker-compose.prod.yml` (the lean deploy-time compose
+  file: production target + backend without the live-source mount +
+  `mem_limit` guard rails) and redeploys both containers.
 
 One-time VM setup:
 

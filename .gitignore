@@ -5,3 +5,4 @@ node_modules/
 dist/
 .claude
 backend/app/data/*
+CLAUDE.md
