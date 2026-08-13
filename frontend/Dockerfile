@@ -7,11 +7,6 @@ RUN npm ci
 
 COPY . .
 
-# Vite bakes every VITE_* variable into the compiled JS at build time — a
-# docker-compose `environment:` entry on the final container would be too
-# late (the bundle is already static by then), so this has to come in as a
-# build ARG instead. Defaults to the local dev backend so a plain
-# `docker build` still works without any arg.
 ARG VITE_API_URL=http://localhost:8000
 ENV VITE_API_URL=$VITE_API_URL
 RUN npm run build

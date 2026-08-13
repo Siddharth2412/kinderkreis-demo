@@ -1,25 +1,4 @@
 #!/usr/bin/env bash
-# One-time provisioning for a blank Ubuntu 22.04/24.04 VM that will host
-# this app and run a self-hosted GitHub Actions runner. Run as a normal
-# sudo-capable user (not root), e.g.:
-#   curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/setup-vm.sh | bash
-# or copy it up and run `bash setup-vm.sh` after `scp`.
-#
-# What it does:
-#   1. Installs Docker Engine + the Compose plugin (docker compose v2).
-#   2. Adds the current user to the `docker` group.
-#   3. Opens only SSH (22) and HTTP (80) publicly via ufw. The backend API
-#      is never exposed directly — nginx (the frontend container) reverse-
-#      proxies /api/ to it over the internal Docker network (see
-#      frontend/nginx.conf), so no separate port needs opening, here or in
-#      any cloud-level security group in front of this VM.
-#   4. Prints the next manual step: registering the GitHub Actions runner
-#      (requires a short-lived token from the GitHub UI, so it can't be
-#      scripted unattended).
-#
-# Plain HTTP only, on purpose — no TLS/self-signed cert here. Once there's
-# a domain pointed at this VM, that's the point to add real HTTPS (e.g. via
-# Caddy or certbot), not before.
 set -euo pipefail
 
 echo "==> Updating apt and installing prerequisites"

@@ -1,13 +1,3 @@
-# Local-dev setup: live-reload bind mounts + the Vite dev server, so
-# `docker compose up` gives you hot reload on both services out of the box.
-#
-# frontend/Dockerfile also has a `production` stage (nginx serving a static
-# build, a few MB of RAM instead of a few hundred) that this file doesn't
-# use day to day. When you actually deploy somewhere resource-constrained,
-# build that target directly:
-#   docker build --target production --build-arg VITE_API_URL=<real backend URL> -t kinderkreis-frontend ./frontend
-# and run it (or ask for a slim deploy-only compose file at that point) —
-# no need to carry a second compose file around until you actually need it.
 services:
   backend:
     build: ./backend
@@ -17,10 +7,6 @@ services:
     env_file:
       - .env
     volumes:
-      # The whole app/ dir, not just data/ — edits are picked up with a
-      # container restart, no rebuild needed. app/data/ is a subdirectory
-      # of this same mount, so the SQLite file still survives restarts and
-      # rebuilds either way.
       - ./backend/app:/app/app
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
@@ -46,11 +32,6 @@ services:
       - ./frontend/src:/app/src
       - ./frontend/index.html:/app/index.html
     healthcheck:
-      # This targets the `build` stage (node:20-slim) as the dev runtime,
-      # which has neither wget nor curl — Node's own http module avoids
-      # needing to install one just for this. 127.0.0.1, not localhost:
-      # some libc/Node resolver combinations try ::1 (IPv6) first, and the
-      # dev server here only listens on IPv4.
       test:
         - CMD
         - node
