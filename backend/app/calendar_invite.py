@@ -30,10 +30,13 @@ def build_booking_ics(booking: dict, provider_row: dict) -> bytes:
     end_dt = datetime.combine(day, time(hour=booking["end_hour"]))
     stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     uid = f"kinderkreis-booking-{booking['id']}@kinderkreis.demo"
-    summary = f"Betreuung: {booking['child_name']} bei {provider_row['name']}"
+    children_label = ", ".join(c["name"] for c in booking["children"])
+    summary = f"Betreuung: {children_label} bei {provider_row['name']}"
 
     description_lines = [
-        f"Kind: {booking['child_name']}",
+        f"Kind: {c['name']}" + (f" ({c['age_months']} Monate)" if c.get("age_months") is not None else "")
+        for c in booking["children"]
+    ] + [
         f"Betreuungsperson: {provider_row['name']}",
         f"Adresse der Eltern: {booking['parent_address']}",
         f"Telefon der Eltern: {booking['parent_phone']}",

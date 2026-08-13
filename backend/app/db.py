@@ -8,6 +8,7 @@ pattern here.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -80,6 +81,14 @@ def _migrate_bookings_table(conn: sqlite3.Connection) -> None:
         "parent_phone": "TEXT",
         "start_hour": "INTEGER",
         "end_hour": "INTEGER",
+        # JSON-encoded list of {"name": ..., "age_months": ...} — replaces the
+        # single child_name/child_age_months columns for multi-child bookings.
+        # Those two columns stay in the table (still NOT NULL for child_name)
+        # so older rows keep reading back fine; see _row_to_booking_dict.
+        "children_json": "TEXT",
+        # Set only when a Tagespflegeperson declines with a reason (see
+        # decline_booking below); NULL for every other status.
+        "decline_reason": "TEXT",
     }
     for name, col_type in new_columns.items():
         if name not in existing:
@@ -458,9 +467,9 @@ def set_certificate_verified(provider_id: int, verified: bool, verified_at: Opti
 # ---------------------------------------------------------------------------
 
 _BOOKING_FIELDS = (
-    "provider_id", "parent_email", "child_name", "child_age_months",
+    "provider_id", "parent_email", "child_name", "child_age_months", "children_json",
     "start_date", "start_hour", "end_hour", "parent_address", "parent_phone",
-    "message", "status", "created_at", "updated_at",
+    "message", "status", "created_at", "updated_at", "decline_reason",
 )
 
 
@@ -475,6 +484,15 @@ def _row_to_booking_dict(row: sqlite3.Row) -> dict:
     data["parent_phone"] = data["parent_phone"] or "Nicht angegeben"
     data["start_hour"] = data["start_hour"] if data["start_hour"] is not None else 0
     data["end_hour"] = data["end_hour"] if data["end_hour"] is not None else 0
+    # children_json carries the real (possibly multi-child) list; child_name/
+    # child_age_months only still exist as NOT-NULL-friendly storage columns
+    # and a fallback for rows written before children_json existed.
+    children_json = data.pop("children_json")
+    legacy_name = data.pop("child_name")
+    legacy_age = data.pop("child_age_months")
+    data["children"] = json.loads(children_json) if children_json else [
+        {"name": legacy_name, "age_months": legacy_age}
+    ]
     return data
 
 
@@ -517,6 +535,16 @@ def update_booking_status(booking_id: int, status: str, updated_at: str) -> None
         conn.execute(
             "UPDATE bookings SET status = ?, updated_at = ? WHERE id = ?",
             (status, updated_at, booking_id),
+        )
+
+
+def decline_booking(booking_id: int, reason: str, updated_at: str) -> None:
+    """Like update_booking_status(..., "declined", ...), but also records why
+    — see BookingDeclineRequest in models.py; a decline always needs one."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE bookings SET status = 'declined', updated_at = ?, decline_reason = ? WHERE id = ?",
+            (updated_at, reason, booking_id),
         )
 
 

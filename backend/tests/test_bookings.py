@@ -5,8 +5,7 @@ from tests.conftest import auth_headers
 FUTURE_DATE = (date.today() + timedelta(days=30)).isoformat()
 
 VALID_BOOKING = {
-    "child_name": "Mia",
-    "child_age_months": 18,
+    "children": [{"name": "Mia", "age_months": 18}],
     "start_date": FUTURE_DATE,
     "start_hour": 8,
     "end_hour": 14,
@@ -91,7 +90,7 @@ def test_provider_sees_incoming_booking(client, provider_profile, eltern, tagesp
 def test_provider_bookings_without_profile(client, tagespflege):
     res = client.get("/api/bookings/provider", headers=auth_headers(tagespflege["token"]))
     assert res.status_code == 200
-    assert res.json() == {"bookings": [], "has_profile": False}
+    assert res.json() == {"bookings": [], "has_profile": False, "total_amount_to_receive": 0.0}
 
 
 def _create_pending_booking(client, provider_profile, eltern) -> int:
@@ -128,9 +127,74 @@ def test_confirm_already_processed_booking_rejected(client, provider_profile, el
 
 def test_decline_booking_success(client, provider_profile, eltern, tagespflege):
     booking_id = _create_pending_booking(client, provider_profile, eltern)
-    res = client.post(f"/api/bookings/{booking_id}/decline", headers=auth_headers(tagespflege["token"]))
+    res = client.post(
+        f"/api/bookings/{booking_id}/decline",
+        json={"reason": "Leider schon ausgebucht in diesem Zeitraum."},
+        headers=auth_headers(tagespflege["token"]),
+    )
     assert res.status_code == 200
-    assert res.json()["status"] == "declined"
+    body = res.json()
+    assert body["status"] == "declined"
+    assert body["decline_reason"] == "Leider schon ausgebucht in diesem Zeitraum."
+
+
+def test_decline_booking_requires_reason(client, provider_profile, eltern, tagespflege):
+    booking_id = _create_pending_booking(client, provider_profile, eltern)
+    res = client.post(f"/api/bookings/{booking_id}/decline", json={}, headers=auth_headers(tagespflege["token"]))
+    assert res.status_code == 422
+
+
+def test_decline_reason_visible_to_parent(client, provider_profile, eltern, tagespflege):
+    booking_id = _create_pending_booking(client, provider_profile, eltern)
+    client.post(
+        f"/api/bookings/{booking_id}/decline",
+        json={"reason": "Leider schon ausgebucht in diesem Zeitraum."},
+        headers=auth_headers(tagespflege["token"]),
+    )
+    res = client.get("/api/bookings/mine", headers=auth_headers(eltern["token"]))
+    booking = res.json()["bookings"][0]
+    assert booking["decline_reason"] == "Leider schon ausgebucht in diesem Zeitraum."
+
+
+def test_create_booking_multiple_children(client, provider_profile, eltern):
+    payload = _booking_payload(
+        provider_profile["id"],
+        children=[{"name": "Mia", "age_months": 18}, {"name": "Noah", "age_months": 36}],
+    )
+    res = client.post("/api/bookings", json=payload, headers=auth_headers(eltern["token"]))
+    assert res.status_code == 201
+    body = res.json()
+    assert [c["name"] for c in body["children"]] == ["Mia", "Noah"]
+
+
+def test_create_booking_requires_at_least_one_child(client, provider_profile, eltern):
+    payload = _booking_payload(provider_profile["id"], children=[])
+    res = client.post("/api/bookings", json=payload, headers=auth_headers(eltern["token"]))
+    assert res.status_code == 422
+
+
+def test_total_amount_to_pay_sums_active_bookings(client, provider_profile, eltern, tagespflege):
+    # Two 6-hour bookings (08:00-14:00) at €25/hour each = €150 + €150 = €300,
+    # plus a declined one that shouldn't count towards the total.
+    _create_pending_booking(client, provider_profile, eltern)
+    third_id = _create_pending_booking(client, provider_profile, eltern)
+    client.post(
+        f"/api/bookings/{third_id}/decline", json={"reason": "Kein Platz mehr."},
+        headers=auth_headers(tagespflege["token"]),
+    )
+    _create_pending_booking(client, provider_profile, eltern)
+
+    res = client.get("/api/bookings/mine", headers=auth_headers(eltern["token"]))
+    assert res.json()["total_amount_to_pay"] == 300.0
+
+
+def test_total_amount_to_receive_sums_active_bookings(client, provider_profile, eltern, tagespflege):
+    # Same two active 6-hour bookings at €18/hour each = €108 + €108 = €216.
+    _create_pending_booking(client, provider_profile, eltern)
+    _create_pending_booking(client, provider_profile, eltern)
+
+    res = client.get("/api/bookings/provider", headers=auth_headers(tagespflege["token"]))
+    assert res.json()["total_amount_to_receive"] == 216.0
 
 
 def test_cancel_booking_success(client, provider_profile, eltern):
@@ -161,7 +225,10 @@ def test_cancel_confirmed_booking_success(client, provider_profile, eltern, tage
 
 def test_cancel_declined_booking_rejected(client, provider_profile, eltern, tagespflege):
     booking_id = _create_pending_booking(client, provider_profile, eltern)
-    client.post(f"/api/bookings/{booking_id}/decline", headers=auth_headers(tagespflege["token"]))
+    client.post(
+        f"/api/bookings/{booking_id}/decline", json={"reason": "Kein Platz mehr."},
+        headers=auth_headers(tagespflege["token"]),
+    )
     res = client.post(f"/api/bookings/{booking_id}/cancel", headers=auth_headers(eltern["token"]))
     assert res.status_code == 409
 

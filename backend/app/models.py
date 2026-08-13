@@ -3,14 +3,14 @@ from __future__ import annotations
 
 from datetime import date
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 # Flat hourly rates for a booking's care window (start_hour..end_hour on
 # start_date). Not configurable per provider/booking yet — every booking
 # is priced the same way, on both sides of the transaction.
-ELTERN_RATE_PER_HOUR = 35.0
+ELTERN_RATE_PER_HOUR = 25.0
 TAGESPFLEGER_RATE_PER_HOUR = 18.0
 
 
@@ -144,10 +144,16 @@ class BookingStatus(str, Enum):
     cancelled = "cancelled"
 
 
+class ChildInfo(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    age_months: Optional[int] = Field(None, ge=0, le=216)
+
+
 class BookingCreate(BaseModel):
     provider_id: int
-    child_name: str = Field(..., min_length=1, max_length=80)
-    child_age_months: Optional[int] = Field(None, ge=0, le=216)
+    # One request can cover several siblings at once (same provider, same
+    # time slot) — at least one child is required.
+    children: List[ChildInfo] = Field(..., min_length=1, max_length=10)
     start_date: str = Field(..., description="Requested start date, ISO format YYYY-MM-DD")
     start_hour: int = Field(..., ge=0, le=23, description="Care start time, 0-23")
     end_hour: int = Field(..., ge=0, le=23, description="Care end time, 0-23")
@@ -175,6 +181,9 @@ class Booking(BookingCreate):
     status: BookingStatus
     created_at: str
     updated_at: str
+    # Set only when status == declined (see BookingDeclineRequest) — the
+    # Tagespflegeperson's reason, shown back to the Eltern who requested it.
+    decline_reason: Optional[str] = None
     # Display-only fields filled in by the API layer depending on who's
     # looking: the parent sees the provider's name/city, the provider sees
     # the parent's name. Never persisted on the row itself.
@@ -190,7 +199,7 @@ class Booking(BookingCreate):
     @computed_field
     @property
     def amount_to_pay(self) -> float:
-        """What the Eltern owes for this booking, at a flat €35/hour."""
+        """What the Eltern owes for this booking, at a flat €25/hour."""
         return round(self.duration_hours * ELTERN_RATE_PER_HOUR, 2)
 
     @computed_field
@@ -198,3 +207,7 @@ class Booking(BookingCreate):
     def amount_to_receive(self) -> float:
         """What the Tagespflegeperson is paid for this booking, at a flat €18/hour."""
         return round(self.duration_hours * TAGESPFLEGER_RATE_PER_HOUR, 2)
+
+
+class BookingDeclineRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500)

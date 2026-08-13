@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import html
+import json
 import logging
 import os
 import secrets
@@ -22,7 +23,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app import db
 from app.calendar_invite import build_booking_ics
 from app.data import SEED_PROVIDERS
-from app.models import Booking, BookingCreate, CareType, Provider, ProviderCreate
+from app.models import Booking, BookingCreate, BookingDeclineRequest, CareType, Provider, ProviderCreate
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("kinderkreis")
@@ -723,6 +724,30 @@ def _booking_for_provider(row: dict, parent_name: Optional[str]) -> dict:
     return booking.model_dump()
 
 
+def _children_label(children: list[dict]) -> str:
+    """Comma-joined child names, e.g. 'Mia, Noah' — for subjects and
+    notifications where only a compact reference is needed."""
+    return ", ".join(c["name"] for c in children)
+
+
+def _children_detail(children: list[dict]) -> str:
+    """Names with ages, e.g. 'Mia (18 Monate), Noah (36 Monate)' — for the
+    provider's own confirmation email, which needs the full picture."""
+    def one(c: dict) -> str:
+        return f"{c['name']} ({c['age_months']} Monate)" if c.get("age_months") is not None else c["name"]
+    return ", ".join(one(c) for c in children)
+
+
+# Bookings that still represent a real financial commitment — pending (not
+# yet decided) and confirmed. Declined/cancelled bookings never contribute
+# to a running total.
+_ACTIVE_BOOKING_STATUSES = {"pending", "confirmed"}
+
+
+def _total_amount(bookings: list[dict], field: str) -> float:
+    return round(sum(b[field] for b in bookings if b["status"] in _ACTIVE_BOOKING_STATUSES), 2)
+
+
 @app.post("/api/bookings", status_code=201)
 def create_booking(payload: BookingCreate, user: dict = Depends(_current_user)):
     _require_eltern(user)
@@ -739,14 +764,23 @@ def create_booking(payload: BookingCreate, user: dict = Depends(_current_user)):
     if requested_start <= datetime.now():
         raise HTTPException(422, "Der gewünschte Termin muss in der Zukunft liegen.")
     now = datetime.utcnow().isoformat()
-    data = payload.model_dump()
-    data.update(parent_email=user["email"], status="pending", created_at=now, updated_at=now)
+    children = [c.model_dump() for c in payload.children]
+    data = payload.model_dump(exclude={"children"})
+    # child_name/child_age_months are legacy, NOT-NULL-friendly storage
+    # columns (see db._migrate_bookings_table); children_json is the real,
+    # possibly multi-child source of truth read back by _row_to_booking_dict.
+    data["child_name"] = _children_label(children)
+    data["child_age_months"] = children[0]["age_months"]
+    data["children_json"] = json.dumps(children)
+    data.update(
+        parent_email=user["email"], status="pending", created_at=now, updated_at=now, decline_reason=None
+    )
     booking_id = db.insert_booking(data)
     _notify(
         provider_row["owner_email"], "booking_requested", booking_id,
         title="Neue Buchungsanfrage",
         body=(
-            f"{user['name']} möchte {payload.child_name} am {payload.start_date} von "
+            f"{user['name']} möchte {_children_label(children)} am {payload.start_date} von "
             f"{payload.start_hour:02d}:00 bis {payload.end_hour:02d}:00 Uhr bei Ihnen anmelden."
         ),
     )
@@ -760,7 +794,7 @@ def list_my_bookings(user: dict = Depends(_current_user)):
     for row in db.list_bookings_by_parent(user["email"]):
         provider_row = db.get_provider(row["provider_id"])
         bookings.append(_booking_for_parent(row, provider_row))
-    return {"bookings": bookings}
+    return {"bookings": bookings, "total_amount_to_pay": _total_amount(bookings, "amount_to_pay")}
 
 
 @app.post("/api/bookings/{booking_id}/cancel")
@@ -782,10 +816,11 @@ def cancel_booking(booking_id: int, background_tasks: BackgroundTasks, user: dic
     # requires provider_row["owner_email"] to be set — but guard anyway
     # rather than assume it.
     if provider_row and provider_row.get("owner_email"):
+        children_label = _children_label(row["children"])
         _notify(
             provider_row["owner_email"], "booking_cancelled", booking_id,
             title="Buchung storniert",
-            body=f"{user['name']} hat die Buchung für {row['child_name']} am {row['start_date']} storniert.",
+            body=f"{user['name']} hat die Buchung für {children_label} am {row['start_date']} storniert.",
         )
         # Email too, not just the in-app notification — the provider may
         # have already blocked out the time (especially for a confirmed
@@ -794,11 +829,11 @@ def cancel_booking(booking_id: int, background_tasks: BackgroundTasks, user: dic
         background_tasks.add_task(
             _send_email,
             provider_row["owner_email"],
-            subject=f"Kinderkreis – Buchung storniert: {row['child_name']} am {row['start_date']}",
+            subject=f"Kinderkreis – Buchung storniert: {children_label} am {row['start_date']}",
             body=(
                 f"{user['name']} hat die "
                 + ("bereits bestätigte " if was_confirmed else "")
-                + f"Buchung für {row['child_name']} am {row['start_date']} ({time_range}) storniert.\n\n"
+                + f"Buchung für {children_label} am {row['start_date']} ({time_range}) storniert.\n\n"
                 f"Adresse: {row['parent_address']}\nTelefon: {row['parent_phone']}\n\n"
                 + ("Falls Sie den Platz für dieses Kind bereits eingeplant hatten, ist er jetzt wieder frei."
                    if was_confirmed else "")
@@ -814,12 +849,16 @@ def list_provider_bookings(user: dict = Depends(_current_user)):
     _require_tagespflege(user)
     provider_row = db.get_provider_by_owner(user["email"])
     if not provider_row:
-        return {"bookings": [], "has_profile": False}
+        return {"bookings": [], "has_profile": False, "total_amount_to_receive": 0.0}
     bookings = []
     for row in db.list_bookings_by_provider(provider_row["id"]):
         parent = db.get_user(row["parent_email"])
         bookings.append(_booking_for_provider(row, parent["name"] if parent else None))
-    return {"bookings": bookings, "has_profile": True}
+    return {
+        "bookings": bookings,
+        "has_profile": True,
+        "total_amount_to_receive": _total_amount(bookings, "amount_to_receive"),
+    }
 
 
 def _resolve_own_booking(booking_id: int, user: dict) -> tuple[dict, dict]:
@@ -848,16 +887,17 @@ def _send_confirmation_emails(row: dict, provider_row: dict, confirmed: dict, pr
         "mimetype": "text/calendar",
     }]
 
-    # Subjects include the child's name/date (not just the booking id) so
+    # Subjects include the children's names/date (not just the booking id) so
     # repeated confirmations for the same parent/provider don't collapse
     # into a single thread in Gmail and similar clients.
     time_range = f"{row['start_hour']:02d}:00–{row['end_hour']:02d}:00 Uhr"
+    children_label = _children_label(row["children"])
     _send_email(
         row["parent_email"],
-        subject=f"Kinderkreis – Buchung bestätigt: {row['child_name']} am {row['start_date']}",
+        subject=f"Kinderkreis – Buchung bestätigt: {children_label} am {row['start_date']}",
         body=(
             f"Gute Nachrichten!\n\n{provider_row['name']} in {provider_row['city']} hat Ihre Buchungsanfrage "
-            f"für {row['child_name']} am {row['start_date']} ({time_range}) bestätigt.\n\n"
+            f"für {children_label} am {row['start_date']} ({time_range}) bestätigt.\n\n"
             "Im Anhang finden Sie einen Kalendereintrag für den Betreuungsstart.\n\n"
             + (f"Nachricht von {provider_row['name']}: {row['message']}\n\n" if row.get("message") else "")
             + "Bei Fragen wenden Sie sich direkt an die Betreuungsperson."
@@ -870,10 +910,10 @@ def _send_confirmation_emails(row: dict, provider_row: dict, confirmed: dict, pr
     parent_label = f"{parent['name']} ({row['parent_email']})" if parent else row["parent_email"]
     _send_email(
         provider_email,
-        subject=f"Kinderkreis – Bestätigung gespeichert: {row['child_name']} am {row['start_date']}",
+        subject=f"Kinderkreis – Bestätigung gespeichert: {children_label} am {row['start_date']}",
         body=(
             f"Sie haben die Buchungsanfrage bestätigt.\n\n"
-            f"Kind: {row['child_name']}\nZeitraum: {row['start_date']}, {time_range}\n"
+            f"Kinder: {_children_detail(row['children'])}\nZeitraum: {row['start_date']}, {time_range}\n"
             f"Eltern: {parent_label}\nAdresse: {row['parent_address']}\nTelefon: {row['parent_phone']}\n\n"
             + (f"Nachricht der Eltern: {row['message']}\n\n" if row.get("message") else "")
             + "Im Anhang finden Sie einen Kalendereintrag für den Betreuungsstart."
@@ -892,7 +932,7 @@ def confirm_booking(booking_id: int, background_tasks: BackgroundTasks, user: di
     _notify(
         row["parent_email"], "booking_confirmed", booking_id,
         title="Buchung bestätigt",
-        body=f"{provider_row['name']} hat Ihre Anfrage für {row['child_name']} bestätigt.",
+        body=f"{provider_row['name']} hat Ihre Anfrage für {_children_label(row['children'])} bestätigt.",
     )
     # the tagespflege account that just confirmed — same as provider_row["owner_email"]
     background_tasks.add_task(_send_confirmation_emails, row, provider_row, confirmed, user["email"])
@@ -900,14 +940,17 @@ def confirm_booking(booking_id: int, background_tasks: BackgroundTasks, user: di
 
 
 @app.post("/api/bookings/{booking_id}/decline")
-def decline_booking(booking_id: int, user: dict = Depends(_current_user)):
+def decline_booking(booking_id: int, payload: BookingDeclineRequest, user: dict = Depends(_current_user)):
     _require_tagespflege(user)
     row, provider_row = _resolve_own_booking(booking_id, user)
-    db.update_booking_status(booking_id, "declined", datetime.utcnow().isoformat())
+    db.decline_booking(booking_id, payload.reason, datetime.utcnow().isoformat())
     _notify(
         row["parent_email"], "booking_declined", booking_id,
         title="Buchung abgelehnt",
-        body=f"{provider_row['name']} hat Ihre Anfrage für {row['child_name']} leider abgelehnt.",
+        body=(
+            f"{provider_row['name']} hat Ihre Anfrage für {_children_label(row['children'])} leider abgelehnt.\n\n"
+            f"Grund: {payload.reason}"
+        ),
     )
     return _booking_for_parent(db.get_booking(booking_id), provider_row)
 

@@ -3,8 +3,7 @@ import { createBooking } from "../api.js";
 import { ELTERN_RATE_PER_HOUR, formatCurrency } from "../utils/format.js";
 
 const INITIAL = {
-  child_name: "",
-  child_age_months: "",
+  children: [{ name: "", age_months: "" }],
   start_date: "",
   start_hour: "8",
   end_hour: "16",
@@ -12,6 +11,9 @@ const INITIAL = {
   parent_phone: "",
   message: "",
 };
+
+// Mirrors BookingCreate.children's max_length in backend/app/models.py.
+const MAX_CHILDREN = 10;
 
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => ({
   value: String(h),
@@ -49,6 +51,23 @@ export default function BookingRequestForm({ provider, auth, onGoToLogin }) {
     }
   };
 
+  const updateChild = (index, key, value) => {
+    setForm((f) => ({
+      ...f,
+      children: f.children.map((c, i) => (i === index ? { ...c, [key]: value } : c)),
+    }));
+  };
+
+  const addChild = () => {
+    setForm((f) =>
+      f.children.length >= MAX_CHILDREN ? f : { ...f, children: [...f.children, { name: "", age_months: "" }] }
+    );
+  };
+
+  const removeChild = (index) => {
+    setForm((f) => (f.children.length <= 1 ? f : { ...f, children: f.children.filter((_, i) => i !== index) }));
+  };
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
@@ -72,8 +91,10 @@ export default function BookingRequestForm({ provider, auth, onGoToLogin }) {
     try {
       await createBooking(auth.token, {
         provider_id: provider.id,
-        child_name: form.child_name,
-        child_age_months: form.child_age_months === "" ? null : Number(form.child_age_months),
+        children: form.children.map((c) => ({
+          name: c.name,
+          age_months: c.age_months === "" ? null : Number(c.age_months),
+        })),
         start_date: form.start_date,
         start_hour: startHour,
         end_hour: endHour,
@@ -132,27 +153,49 @@ export default function BookingRequestForm({ provider, auth, onGoToLogin }) {
         <p className="form-hint">Aktuell keine freien Plätze — Ihre Anfrage wird als Warteliste vermerkt.</p>
       )}
       <div className="form-grid">
-        <div className="field">
-          <label htmlFor="child_name">Name des Kindes</label>
-          <input
-            id="child_name"
-            required
-            value={form.child_name}
-            onChange={(e) => set("child_name", e.target.value)}
-            placeholder="z. B. Mia"
-          />
-        </div>
-        <div className="field">
-          <label htmlFor="child_age_months">Alter (Monate)</label>
-          <input
-            id="child_age_months"
-            type="number"
-            min="0"
-            max="216"
-            value={form.child_age_months}
-            onChange={(e) => set("child_age_months", e.target.value)}
-          />
-        </div>
+        {form.children.map((child, index) => (
+          <div className="field span-2 child-row" key={index}>
+            <div className="field">
+              <label htmlFor={`child_name_${index}`}>
+                Name des Kindes{form.children.length > 1 ? ` ${index + 1}` : ""}
+              </label>
+              <input
+                id={`child_name_${index}`}
+                required
+                value={child.name}
+                onChange={(e) => updateChild(index, "name", e.target.value)}
+                placeholder="z. B. Mia"
+              />
+            </div>
+            <div className="field">
+              <label htmlFor={`child_age_months_${index}`}>Alter (Monate)</label>
+              <input
+                id={`child_age_months_${index}`}
+                type="number"
+                min="0"
+                max="216"
+                value={child.age_months}
+                onChange={(e) => updateChild(index, "age_months", e.target.value)}
+              />
+            </div>
+            {form.children.length > 1 && (
+              <button
+                type="button"
+                className="btn-ghost btn-small remove-child-btn"
+                onClick={() => removeChild(index)}
+              >
+                Entfernen
+              </button>
+            )}
+          </div>
+        ))}
+        {form.children.length < MAX_CHILDREN && (
+          <div className="field span-2">
+            <button type="button" className="link-btn" onClick={addChild}>
+              + Weiteres Kind hinzufügen
+            </button>
+          </div>
+        )}
 
         <div className={`field ${dateError ? "field-error" : ""}`}>
           <label htmlFor="start_date">Gewünschter Start</label>

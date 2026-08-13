@@ -71,11 +71,13 @@ resource-constrained.
   Qualifikationsnachweis (PDF/JPG/PNG, ≤5MB) — the file itself is private to
   that account; the public directory only shows whether one was uploaded.
 - **Buchungsanfrage** (from a provider's detail modal, `eltern` accounts
-  only): send a booking request — child's name/age, desired date and
-  start/end hour, the parent's address and phone number, an optional
-  message — to a provider that has a linked `tagespflege` account. The
-  requested date/time must be in the future and the end hour after the
-  start hour; both are validated server-side. Unclaimed/seed profiles show
+  only): send a booking request — one or more children (name/age each, e.g.
+  for siblings booked together), desired date and start/end hour, the
+  parent's address and phone number, an optional message — to a provider
+  that has a linked `tagespflege` account. The requested date/time must be
+  in the future and the end hour after the start hour; both are validated
+  server-side. A declined request always carries the provider's reason,
+  visible to the Eltern who sent it. Unclaimed/seed profiles show
   an explanation instead of the form, since nobody is signed in to confirm
   a request against them.
 - **Meine Anfragen** (nav link, `eltern`): the status of every booking
@@ -85,9 +87,14 @@ resource-constrained.
   cancelled one can't be cancelled again. Either way the owning
   Tagespflegeperson gets an in-app notification *and* an email (they may
   not be logged in when it happens, especially for an already-confirmed
-  booking they may have blocked time out for).
+  booking they may have blocked time out for). Each booking shows what it
+  costs (flat €25/hour) plus a running total across every still-open or
+  confirmed booking; a declined one also shows the provider's reason.
 - **Buchungsanfragen** (nav link, `tagespflege`): incoming requests for your
-  own profile, with Confirm/Decline actions on open ones.
+  own profile, with Confirm/Decline actions on open ones — declining
+  requires a short reason, shown back to the Eltern who requested it. Each
+  booking shows what the provider is paid for it (flat €18/hour) plus a
+  running total across every still-open or confirmed booking.
 - **Notification bell** (nav, any logged-in account): an in-app inbox,
   polled every ~25s, that a `tagespflege` account uses to see new booking
   requests and an `eltern` account uses to see confirm/decline updates. When

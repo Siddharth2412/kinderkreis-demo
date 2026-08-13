@@ -23,6 +23,12 @@ export function formatDate(iso) {
   return new Date(iso).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
+export function formatChildrenLabel(children) {
+  return (children || [])
+    .map((c) => (c.age_months != null ? `${c.name} (${c.age_months} Monate)` : c.name))
+    .join(", ");
+}
+
 export function formatHourRange(startHour, endHour) {
   const pad = (h) => String(h).padStart(2, "0");
   return `${pad(startHour)}:00–${pad(endHour)}:00 Uhr`;
@@ -32,7 +38,7 @@ export function formatHourRange(startHour, endHour) {
 // live estimate shown while an Eltern account fills out a booking request.
 // The amount that's actually charged is always computed server-side
 // (Booking.amount_to_pay), this is just a preview.
-export const ELTERN_RATE_PER_HOUR = 35;
+export const ELTERN_RATE_PER_HOUR = 25;
 
 export function formatCurrency(amount) {
   return new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" }).format(amount);

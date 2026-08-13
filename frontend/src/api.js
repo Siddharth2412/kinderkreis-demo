@@ -167,8 +167,12 @@ export const fetchProviderBookings = (token) =>
 export const confirmBooking = (token, id) =>
   request(`/api/bookings/${id}/confirm`, { method: "POST", headers: authHeaders(token) });
 
-export const declineBooking = (token, id) =>
-  request(`/api/bookings/${id}/decline`, { method: "POST", headers: authHeaders(token) });
+export const declineBooking = (token, id, reason) =>
+  request(`/api/bookings/${id}/decline`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ reason }),
+  });
 
 // Notifications — in-app only, shared by both roles.
 export const fetchNotifications = (token) =>

@@ -202,6 +202,9 @@ footer{ padding: 40px 0; border-top:1px solid var(--line); text-align:center; co
 .booking-form .form-hint{ margin-top:0; margin-bottom:4px; }
 .hour-range{ flex-direction:row; gap:16px; }
 .hour-range .field{ flex:1; }
+.child-row{ flex-direction:row; gap:16px; align-items:flex-end; }
+.child-row .field{ flex:1; }
+.child-row .remove-child-btn{ flex:none; }
 .form-grid .field-error label{ color: var(--danger); }
 .form-grid .field-error input,
 .form-grid .field-error select{ border-color: var(--danger); background: #FBEAE4; }
@@ -212,6 +215,12 @@ footer{ padding: 40px 0; border-top:1px solid var(--line); text-align:center; co
 .booking-card-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
 .booking-card .modal-bio{ font-size:0.9rem; margin:6px 0 0; }
 .booking-meta{ font-size:0.82rem; color:var(--sage); margin:4px 0 0; }
+.decline-reason-form{ margin-top:14px; display:flex; flex-direction:column; gap:10px; }
+.decline-reason-input{
+  border:1.5px solid var(--line); border-radius:10px; padding:10px 12px; font-size:0.92rem;
+  font-family:inherit; background:#fff; color:var(--ink); resize:vertical; min-height:60px;
+}
+.decline-reason-form .form-actions{ margin-top:0; }
 .booking-card .form-actions{ margin-top:14px; }
 
 /* Notification bell */
