@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchMyBookings, cancelBooking } from "../api.js";
-import { formatBookingStatus, formatDate, formatHourRange } from "../utils/format.js";
+import { formatBookingStatus, formatCurrency, formatDate, formatHourRange } from "../utils/format.js";
 
 // "Meine Anfragen" — an Eltern account's own booking requests and their
 // status. Mapped to the account via the session token, same shape as
@@ -70,6 +70,9 @@ export default function MyBookingsView({ token }) {
                 </p>
                 <p className="booking-meta">
                   {b.parent_address} · {b.parent_phone}
+                </p>
+                <p className="booking-meta">
+                  Zu zahlen: <strong>{formatCurrency(b.amount_to_pay)}</strong> ({b.duration_hours} Std. à 35,00 €)
                 </p>
                 {b.message && <p className="modal-bio">„{b.message}"</p>}
                 {(b.status === "pending" || b.status === "confirmed") && (

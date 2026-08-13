@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchProviderBookings, confirmBooking, declineBooking } from "../api.js";
-import { formatBookingStatus, formatDate, formatHourRange } from "../utils/format.js";
+import { formatBookingStatus, formatCurrency, formatDate, formatHourRange } from "../utils/format.js";
 
 // "Buchungsanfragen" — incoming booking requests for the logged-in
 // Tagespflegeperson's own profile (mapped via db.get_provider_by_owner on
@@ -80,6 +80,10 @@ export default function ProviderBookingsView({ token, onGoToProfile }) {
                 </p>
                 <p className="booking-meta">
                   📍 {b.parent_address} · 📞 {b.parent_phone}
+                </p>
+                <p className="booking-meta">
+                  Sie erhalten: <strong>{formatCurrency(b.amount_to_receive)}</strong> ({b.duration_hours} Std. à
+                  18,00 €)
                 </p>
                 {b.message && <p className="modal-bio">„{b.message}"</p>}
                 {b.status === "pending" && (

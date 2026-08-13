@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { createBooking } from "../api.js";
+import { ELTERN_RATE_PER_HOUR, formatCurrency } from "../utils/format.js";
 
 const INITIAL = {
   child_name: "",
@@ -37,6 +38,8 @@ export default function BookingRequestForm({ provider, auth, onGoToLogin }) {
   const [error, setError] = useState(null);
   const [dateError, setDateError] = useState(false);
   const [sent, setSent] = useState(false);
+
+  const previewHours = Math.max(0, Number(form.end_hour) - Number(form.start_hour));
 
   const set = (key, value) => {
     setForm((f) => ({ ...f, [key]: value }));
@@ -184,6 +187,12 @@ export default function BookingRequestForm({ provider, auth, onGoToLogin }) {
             </select>
           </div>
         </div>
+        {previewHours > 0 && (
+          <p className="form-hint span-2">
+            Geschätzter Betrag: <strong>{formatCurrency(previewHours * ELTERN_RATE_PER_HOUR)}</strong> ({previewHours}{" "}
+            Std. à {formatCurrency(ELTERN_RATE_PER_HOUR)}) — die genaue Endabrechnung erfolgt bei Bestätigung.
+          </p>
+        )}
 
         <div className="field span-2">
           <label htmlFor="parent_address">Ihre Adresse</label>

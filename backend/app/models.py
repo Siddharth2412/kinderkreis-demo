@@ -5,7 +5,13 @@ from datetime import date
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+
+# Flat hourly rates for a booking's care window (start_hour..end_hour on
+# start_date). Not configurable per provider/booking yet — every booking
+# is priced the same way, on both sides of the transaction.
+ELTERN_RATE_PER_HOUR = 35.0
+TAGESPFLEGER_RATE_PER_HOUR = 18.0
 
 
 class CareType(str, Enum):
@@ -175,3 +181,20 @@ class Booking(BookingCreate):
     provider_name: Optional[str] = None
     provider_city: Optional[str] = None
     parent_name: Optional[str] = None
+
+    @computed_field
+    @property
+    def duration_hours(self) -> int:
+        return max(0, self.end_hour - self.start_hour)
+
+    @computed_field
+    @property
+    def amount_to_pay(self) -> float:
+        """What the Eltern owes for this booking, at a flat €35/hour."""
+        return round(self.duration_hours * ELTERN_RATE_PER_HOUR, 2)
+
+    @computed_field
+    @property
+    def amount_to_receive(self) -> float:
+        """What the Tagespflegeperson is paid for this booking, at a flat €18/hour."""
+        return round(self.duration_hours * TAGESPFLEGER_RATE_PER_HOUR, 2)
