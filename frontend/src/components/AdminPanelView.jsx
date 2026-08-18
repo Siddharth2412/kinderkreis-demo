@@ -5,6 +5,7 @@ import {
   verifyProviderCertificate,
   unverifyProviderCertificate,
 } from "../api.js";
+import AdminManageView from "./AdminManageView.jsx";
 
 function formatTimestamp(iso) {
   if (!iso) return "";
@@ -17,6 +18,10 @@ function formatTimestamp(iso) {
 // way a provider gets the "✓ Geprüft" tick shown to parents on the public
 // directory (see ProviderCard.jsx / ProviderDetailModal.jsx).
 export default function AdminPanelView({ admin, onLogout }) {
+  // "Admins verwalten" only ever exists for the super admin — a regular
+  // admin's token 403s on every /api/admin/admins... endpoint anyway, but
+  // there's no reason to even render the tab for them.
+  const [tab, setTab] = useState("certificates");
   const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -72,8 +77,12 @@ export default function AdminPanelView({ admin, onLogout }) {
       <div className="section-head admin-head">
         <div>
           <span className="eyebrow">Admin</span>
-          <h1>Zertifikatsprüfung</h1>
-          <p>Hochgeladene Qualifikationsnachweise ansehen und bestätigen.</p>
+          <h1>{tab === "certificates" ? "Zertifikatsprüfung" : "Admins verwalten"}</h1>
+          <p>
+            {tab === "certificates"
+              ? "Hochgeladene Qualifikationsnachweise ansehen und bestätigen."
+              : "Admin-Konten anlegen sowie Passwort oder 2FA zurücksetzen."}
+          </p>
         </div>
         <div className="admin-head-actions">
           <span className="nav-user-name">{admin.username}</span>
@@ -83,52 +92,75 @@ export default function AdminPanelView({ admin, onLogout }) {
         </div>
       </div>
 
-      {error && <div className="form-error">{error}</div>}
+      {admin.is_super_admin && (
+        <div className="form-actions">
+          <button
+            className={tab === "certificates" ? "btn-primary btn-small" : "btn-ghost btn-small"}
+            onClick={() => setTab("certificates")}
+          >
+            Zertifikate
+          </button>
+          <button
+            className={tab === "admins" ? "btn-primary btn-small" : "btn-ghost btn-small"}
+            onClick={() => setTab("admins")}
+          >
+            Admins verwalten
+          </button>
+        </div>
+      )}
 
-      {loading ? (
-        <p className="result-count">Wird geladen …</p>
-      ) : providers.length === 0 ? (
-        <div className="empty-state">Noch keine hochgeladenen Zertifikate.</div>
+      {tab === "admins" ? (
+        <AdminManageView token={admin.token} />
       ) : (
-        <div className="booking-list">
-          {providers.map((p) => (
-            <div className="booking-card" key={p.id}>
-              <div className="booking-card-head">
-                <div>
-                  <div className="provider-name">{p.name}</div>
-                  <div className="provider-city">
-                    {p.city} · {p.owner_email}
+        <>
+          {error && <div className="form-error">{error}</div>}
+
+          {loading ? (
+            <p className="result-count">Wird geladen …</p>
+          ) : providers.length === 0 ? (
+            <div className="empty-state">Noch keine hochgeladenen Zertifikate.</div>
+          ) : (
+            <div className="booking-list">
+              {providers.map((p) => (
+                <div className="booking-card" key={p.id}>
+                  <div className="booking-card-head">
+                    <div>
+                      <div className="provider-name">{p.name}</div>
+                      <div className="provider-city">
+                        {p.city} · {p.owner_email}
+                      </div>
+                    </div>
+                    {p.certificate_verified ? (
+                      <span className="badge verified">✓ Geprüft</span>
+                    ) : (
+                      <span className="badge muted">Ausstehend</span>
+                    )}
+                  </div>
+                  <p className="booking-meta">
+                    📄 {p.certificate_original_name} · hochgeladen {formatTimestamp(p.certificate_uploaded_at)}
+                    {p.certificate_verified_at && ` · geprüft ${formatTimestamp(p.certificate_verified_at)}`}
+                  </p>
+                  <div className="form-actions">
+                    <button className="btn-ghost btn-small" onClick={() => handleView(p.id)}>
+                      Zertifikat ansehen
+                    </button>
+                    <button
+                      className="btn-primary btn-small"
+                      disabled={busyId === p.id}
+                      onClick={() => handleToggleVerified(p)}
+                    >
+                      {busyId === p.id
+                        ? "…"
+                        : p.certificate_verified
+                        ? "Prüfung zurückziehen"
+                        : "Als geprüft bestätigen"}
+                    </button>
                   </div>
                 </div>
-                {p.certificate_verified ? (
-                  <span className="badge verified">✓ Geprüft</span>
-                ) : (
-                  <span className="badge muted">Ausstehend</span>
-                )}
-              </div>
-              <p className="booking-meta">
-                📄 {p.certificate_original_name} · hochgeladen {formatTimestamp(p.certificate_uploaded_at)}
-                {p.certificate_verified_at && ` · geprüft ${formatTimestamp(p.certificate_verified_at)}`}
-              </p>
-              <div className="form-actions">
-                <button className="btn-ghost btn-small" onClick={() => handleView(p.id)}>
-                  Zertifikat ansehen
-                </button>
-                <button
-                  className="btn-primary btn-small"
-                  disabled={busyId === p.id}
-                  onClick={() => handleToggleVerified(p)}
-                >
-                  {busyId === p.id
-                    ? "…"
-                    : p.certificate_verified
-                    ? "Prüfung zurückziehen"
-                    : "Als geprüft bestätigen"}
-                </button>
-              </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
     </div>
   );

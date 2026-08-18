@@ -91,17 +91,56 @@ export const fetchMyCertificateBlob = async (token) => {
   return { blob: await res.blob(), filename: match ? match[1] : "zertifikat" };
 };
 
-// Admin — a separate username/password login, unrelated to the eltern/
-// tagespflege accounts above (own token, checked against its own endpoints
-// only). See backend/app/main.py's "Admin endpoints" section.
+// Admin — a separate login from the eltern/tagespflege accounts above (own
+// token, checked against its own endpoints only). See backend/app/main.py's
+// "Admin endpoints" section. Login is two steps: adminLogin (username +
+// password) never returns a session by itself, only a ticket + a mode
+// ("verify" or, on an account's first-ever login, "enroll" with a QR to
+// scan) — adminVerifyTwoFactor consumes that ticket + a 6-digit code and
+// only then returns a real session token.
 export const adminLogin = (username, password) =>
   request("/api/admin/login", { method: "POST", body: JSON.stringify({ username, password }) });
+
+export const adminVerifyTwoFactor = (ticket, code) =>
+  request("/api/admin/login/2fa", { method: "POST", body: JSON.stringify({ ticket, code }) });
 
 export const adminLogout = (token) =>
   request("/api/admin/logout", { method: "POST", body: JSON.stringify({ token }) });
 
 export const fetchAdminProviders = (token) =>
   request("/api/admin/providers", { headers: authHeaders(token) });
+
+// Admin management — super admin only (backend 403s otherwise). Creates/
+// resets/deactivates other admin accounts; regular admins have no
+// self-service way to change their own username/password/2FA.
+export const fetchAdmins = (token) =>
+  request("/api/admin/admins", { headers: authHeaders(token) });
+
+export const createAdmin = (token, username, password) =>
+  request("/api/admin/admins", {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ username, password }),
+  });
+
+export const resetAdminPassword = (token, username, new_password) =>
+  request(`/api/admin/admins/${encodeURIComponent(username)}/reset-password`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ new_password }),
+  });
+
+export const resetAdminTotp = (token, username) =>
+  request(`/api/admin/admins/${encodeURIComponent(username)}/reset-2fa`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+
+export const deactivateAdmin = (token, username) =>
+  request(`/api/admin/admins/${encodeURIComponent(username)}/deactivate`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
 
 export const verifyProviderCertificate = (token, providerId) =>
   request(`/api/admin/providers/${providerId}/certificate/verify`, {

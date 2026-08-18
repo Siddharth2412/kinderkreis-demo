@@ -112,20 +112,42 @@ is loaded on backend startup so the directory isn't empty on first run. The
 seed providers have no linked account, so — like the real workflow — they
 can't receive booking requests until claimed by a `tagespflege` signup.
 
-- **Admin** (footer link "Admin", separate from everything above): a plain
-  username/password login — no email, no OTP, no `eltern`/`tagespflege`
-  role, and its own session type entirely, so an admin token is never valid
-  on a user endpoint or vice versa. Provisioned via `ADMIN_USERNAME`/
-  `ADMIN_PASSWORD` in `.env` (defaults: `admin` / `admin123`) the first time
-  the database is created — there's no admin signup form on purpose. The
-  panel lists every provider that has uploaded a Qualifikationsnachweis,
-  lets the admin open/download the file, and mark it "✓ Geprüft" (or
-  retract that). That tick — and only that tick — is what parents see on
-  the public directory next to a provider's certification status; the file
-  itself always stays private to its owner and to admins. Re-uploading or
-  deleting a certificate resets the tick, since a verification is tied to
-  one specific file, never to "whatever is currently uploaded". Verifying
-  also emails the Tagespflegeperson (same SMTP plumbing as OTPs/booking
+- **Admin** (footer link "Admin", separate from everything above): its own
+  account universe entirely — no email, no `eltern`/`tagespflege` role, own
+  session type, so an admin token is never valid on a user endpoint or vice
+  versa. Login is two steps and **TOTP 2FA (authenticator app) is mandatory
+  for every admin, no exceptions**: `POST /api/admin/login` (username +
+  password) never returns a session by itself, only a short-lived ticket and
+  either `mode: "verify"` (already enrolled — enter the 6-digit code from
+  your authenticator app) or `mode: "enroll"` (this account's very first
+  login — scan the returned QR code, then confirm with one code); either way
+  `POST /api/admin/login/2fa` consumes the ticket + code and only then
+  issues a real session token.
+
+  Exactly one admin is the **super admin** — the account provisioned via
+  `ADMIN_USERNAME`/`ADMIN_PASSWORD` in `.env` (defaults: `admin` /
+  `admin123`) the first time the database is created, including its own
+  mandatory TOTP enrollment on first login. Only the super admin sees the
+  "Admins verwalten" tab, from which they can create new admin accounts
+  (username + initial password — the new admin sets up their own 2FA on
+  their own first login, the super admin never sees their secret/QR), reset
+  an admin's password, reset an admin's 2FA (e.g. after a lost device, which
+  forces re-enrollment), or deactivate an admin (blocks login and kills any
+  session immediately). Regular admins have no self-service way to change
+  their own username or password — that only ever happens through this
+  panel. The super admin's own account can't be targeted through it (no
+  self-deactivation, no self-reset) and there's still no *public* admin
+  signup form.
+
+  Any admin, super admin included, can review the certificate queue: it
+  lists every provider that has uploaded a Qualifikationsnachweis, lets the
+  admin open/download the file, and mark it "✓ Geprüft" (or retract that).
+  That tick — and only that tick — is what parents see on the public
+  directory next to a provider's certification status; the file itself
+  always stays private to its owner and to admins. Re-uploading or deleting
+  a certificate resets the tick, since a verification is tied to one
+  specific file, never to "whatever is currently uploaded". Verifying also
+  emails the Tagespflegeperson (same SMTP plumbing as OTPs/booking
   confirmations) in addition to the in-app notification, since they may not
   be logged in when it happens; retracting a verification does not send one.
 
@@ -159,17 +181,24 @@ can't receive booking requests until claimed by a `tagespflege` signup.
 | GET    | `/api/notifications`               | 🔒 Your in-app notifications + unread count |
 | POST   | `/api/notifications/{id}/read`     | 🔒 Mark one notification read              |
 | POST   | `/api/notifications/read-all`      | 🔒 Mark all notifications read             |
-| POST   | `/api/admin/login`                 | Admin login (username/password, returns a session token) |
+| POST   | `/api/admin/login`                 | Admin login step 1 (username/password) — returns a 2FA ticket, never a session |
+| POST   | `/api/admin/login/2fa`             | Admin login step 2 (TOTP code + ticket) — returns a session token |
 | POST   | `/api/admin/logout`                | Invalidate an admin session token         |
 | GET    | `/api/admin/providers`             | 🔒🛡️ Providers with an uploaded certificate, newest first |
 | GET    | `/api/admin/providers/{id}/certificate` | 🔒🛡️ Download a provider's certificate |
 | POST   | `/api/admin/providers/{id}/certificate/verify` | 🔒🛡️ Mark the certificate verified (parent-visible tick) |
 | POST   | `/api/admin/providers/{id}/certificate/unverify` | 🔒🛡️ Retract a verification |
+| GET    | `/api/admin/admins`                | 🔒👑 List every admin account              |
+| POST   | `/api/admin/admins`                | 🔒👑 Create an admin (username + initial password) |
+| POST   | `/api/admin/admins/{username}/reset-password` | 🔒👑 Set a new password for an admin |
+| POST   | `/api/admin/admins/{username}/reset-2fa` | 🔒👑 Clear an admin's TOTP secret (forces re-enrollment) |
+| POST   | `/api/admin/admins/{username}/deactivate` | 🔒👑 Revoke an admin's login + kill their sessions |
 
 🔒 = requires `Authorization: Bearer <token>` (from login/verify-email).
 👪 = additionally requires `role: "eltern"`.
 🧑‍🍼 = additionally requires `role: "tagespflege"`.
-🛡️ = admin token only (from `/api/admin/login`) — never interchangeable with a 🔒 user token.
+🛡️ = admin token only (from `/api/admin/login` + `/api/admin/login/2fa`) — never interchangeable with a 🔒 user token.
+👑 = additionally requires the super admin's token — a regular admin's token 403s.
 
 ## Project layout
 
@@ -358,7 +387,8 @@ where HTTPS is worth adding.
   Qualifikationsnachweis itself now goes through an admin verification step
   — see the Admin panel above — but that's a manual review, not an
   automated registry check).
-- Give admins actual accounts (name, multiple admins, an audit log of who
-  verified what) instead of the single shared username/password login —
-  fine for a demo, not for a real moderation team.
+- Multiple admins with mandatory TOTP 2FA and super-admin-managed accounts
+  now exist (see the Admin section above); still missing for a real
+  moderation team: a display name per admin (just a username today) and an
+  audit log of who verified/reset/deactivated what.
 - Add photo upload for provider profiles (certificate upload already exists).

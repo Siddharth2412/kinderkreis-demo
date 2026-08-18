@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
+import pyotp
 import pytest
 
 _SESSION_TMP_DIR = tempfile.mkdtemp(prefix="kinderkreis-test-")
@@ -49,7 +51,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     # app.main only seeds the admin once, at its own (session-wide) import
     # time — against the session temp DB, not this test's fresh one — so
     # each test needs its own seed, same as the provider seed above.
-    db.seed_admin_if_empty(ADMIN_USERNAME, _hash_password(ADMIN_PASSWORD))
+    db.seed_admin_if_empty(ADMIN_USERNAME, _hash_password(ADMIN_PASSWORD), datetime.utcnow().isoformat())
 
     with TestClient(app) as c:
         yield c
@@ -123,9 +125,28 @@ def provider_profile(client: TestClient, tagespflege: dict) -> dict:
     return res.json()
 
 
-@pytest.fixture()
-def admin(client: TestClient) -> dict:
-    """A logged-in admin session (token + username), for the /api/admin/... endpoints."""
-    res = client.post("/api/admin/login", json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD})
+def complete_admin_login(client: TestClient, username: str, password: str, secret: str | None = None) -> dict:
+    """Drives the full two-step admin login (password, then TOTP) and
+    returns the session payload ({token, username, is_super_admin}) — every
+    admin login is mandatory-2FA now. On the account's very first ("enroll")
+    login, `secret` can be omitted — the server just generated and returned
+    one. For a later ("verify") login, pass the secret captured from that
+    earlier enrollment (the server never resends it once confirmed)."""
+    res = client.post("/api/admin/login", json={"username": username, "password": password})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    totp_secret = body.get("secret") or secret
+    assert totp_secret, "no TOTP secret available — pass one explicitly for a 'verify'-mode login"
+    code = pyotp.TOTP(totp_secret).now()
+    res = client.post("/api/admin/login/2fa", json={"ticket": body["ticket"], "code": code})
     assert res.status_code == 200, res.text
     return res.json()
+
+
+@pytest.fixture()
+def admin(client: TestClient) -> dict:
+    """A logged-in admin session (token + username + is_super_admin), for
+    the /api/admin/... endpoints. Drives the mandatory two-step (password +
+    TOTP) login — this is always the bootstrap admin's first-ever login on
+    a fresh test DB, so it always lands on the "enroll" branch."""
+    return complete_admin_login(client, ADMIN_USERNAME, ADMIN_PASSWORD)

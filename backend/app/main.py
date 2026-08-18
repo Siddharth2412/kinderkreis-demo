@@ -8,13 +8,14 @@ import secrets
 import smtplib
 import sqlite3
 import ssl
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
 
+import pyotp
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -31,6 +32,10 @@ logger = logging.getLogger("kinderkreis")
 SESSION_TTL = timedelta(hours=24)
 OTP_TTL = timedelta(minutes=10)
 ADMIN_SESSION_TTL = timedelta(hours=12)
+# The admin already has ticket+QR/prompt on screen at this point (not
+# waiting on an email like OTP_TTL) — 5 minutes is enough to open an
+# authenticator app and type 6 digits.
+ADMIN_2FA_TICKET_TTL = timedelta(minutes=5)
 
 app = FastAPI(
     title="Kinderkreis API",
@@ -100,16 +105,43 @@ def _verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(actual.hex(), expected_hex)
 
 
-# The admin account is entirely separate from `users` — username/password
-# only, no email/OTP/role — so it's provisioned via env vars rather than a
-# public signup form (there must be no self-service way to become an admin).
-# Like the provider seed near the top of this file, this only takes effect on
-# a fresh database; changing ADMIN_USERNAME/ADMIN_PASSWORD later has no
-# effect on an existing one (there's deliberately no "change admin password"
-# endpoint either — swap the env vars and reset the DB if that's ever needed).
+def _verify_totp_code(secret: str, code: str, last_used_step: Optional[int]) -> Optional[int]:
+    """pyotp's TOTP.verify(code, valid_window=1) only returns bool — it
+    doesn't say *which* 30s step matched, and that's needed to block replay
+    of an already-used code. So this checks the same +/-1 step window
+    manually via TOTP.at(counter_offset=...), skips any step already spent
+    (<= last_used_step), and returns the matched step so the caller can
+    persist it as the new low-water mark. Returns None if no step matches.
+
+    Uses an explicit UTC-aware `now`, not datetime.utcnow() — pyotp's
+    timecode() treats a naive datetime as local time (time.mktime), which
+    would silently compute the wrong step on any server not running in UTC."""
+    totp = pyotp.TOTP(secret)
+    now = datetime.now(timezone.utc)
+    current_step = totp.timecode(now)
+    for offset in (-1, 0, 1):
+        step = current_step + offset
+        if last_used_step is not None and step <= last_used_step:
+            continue
+        if hmac.compare_digest(totp.at(now, counter_offset=offset), code):
+            return step
+    return None
+
+
+# The admin realm is entirely separate from `users` — own tables, own session
+# type, no email/role overlap. ADMIN_USERNAME/ADMIN_PASSWORD only provision
+# the *initial* credentials of the sole super admin, the first time the
+# admins table is created — like the provider seed near the top of this
+# file, changing them later has no effect on an existing database. Every
+# other admin account (and every password/2FA reset) goes through the
+# super-admin-only endpoints near the bottom of this file instead; there is
+# still no *public* admin signup. Every admin — including this bootstrap one
+# — must complete mandatory TOTP enrollment on first login before a session
+# is ever issued (see admin_login/admin_login_2fa below).
 db.seed_admin_if_empty(
     os.environ.get("ADMIN_USERNAME", "admin"),
     _hash_password(os.environ.get("ADMIN_PASSWORD", "admin123")),
+    datetime.utcnow().isoformat(),
 )
 
 
@@ -263,8 +295,18 @@ def _current_admin(authorization: Optional[str] = Header(None)) -> dict:
             db.delete_admin_session(token)
         raise HTTPException(401, "Sitzung ungültig oder abgelaufen. Bitte erneut anmelden.")
     admin = db.get_admin(session["username"])
-    if not admin:
+    if not admin or not admin["is_active"]:
+        # Defense in depth: a deactivated admin's sessions are deleted the
+        # moment they're deactivated (see deactivate_admin_account below),
+        # but this catches any other path that might leave a stale one.
+        db.delete_admin_session(token)
         raise HTTPException(401, "Admin nicht gefunden")
+    return admin
+
+
+def _current_super_admin(admin: dict = Depends(_current_admin)) -> dict:
+    if admin["role"] != "super_admin":
+        raise HTTPException(403, "Nur für den Super-Admin verfügbar")
     return admin
 
 
@@ -307,8 +349,22 @@ class AdminLogin(BaseModel):
     password: str = Field(..., min_length=1, max_length=128)
 
 
+class AdminTwoFactorVerify(BaseModel):
+    ticket: str = Field(..., min_length=1)
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
 class AdminLogoutRequest(BaseModel):
     token: str
+
+
+class AdminCreateRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=80)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class AdminPasswordResetRequest(BaseModel):
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class VerifyEmailRequest(BaseModel):
@@ -438,21 +494,81 @@ def reset_password(payload: ResetPasswordRequest):
 # ---------------------------------------------------------------------------
 # Admin endpoints
 #
-# Username/password only — a completely separate login from the eltern/
-# tagespflege accounts above (own tables, own session type, no email/OTP/
-# role). The account itself is provisioned via ADMIN_USERNAME/ADMIN_PASSWORD
-# at startup (see db.seed_admin_if_empty above); there is deliberately no
-# admin signup endpoint. An admin reviews uploaded Qualifikationsnachweis
-# files and marks them verified — the only way a provider gets the "✓
-# geprüft" tick parents see on the public directory.
+# A completely separate login from the eltern/tagespflege accounts above
+# (own tables, own session type, no email/role overlap). Login is two steps:
+# POST .../login (username+password) never returns a session by itself — it
+# returns a short-lived ticket and either "verify" (admin already has TOTP
+# set up: submit a code) or "enroll" (first-ever login: scan the returned QR,
+# submit a code to confirm+activate). POST .../login/2fa consumes that ticket
+# + code and only then issues a real session token. 2FA is mandatory for
+# every admin, including the super admin — there is no password-only path.
+#
+# Exactly one admin has role="super_admin" — the account provisioned from
+# ADMIN_USERNAME/ADMIN_PASSWORD at startup (see db.seed_admin_if_empty
+# above). Only the super admin can create/reset/deactivate other admin
+# accounts (see "Admin management" further below); there is still no
+# *public* admin signup. Any admin (super admin included) can review
+# uploaded Qualifikationsnachweis files and mark them verified — the only
+# way a provider gets the "✓ geprüft" tick parents see on the public
+# directory.
 # ---------------------------------------------------------------------------
 
 @app.post("/api/admin/login")
 def admin_login(payload: AdminLogin):
     admin = db.get_admin(payload.username.strip())
-    if not admin or not _verify_password(payload.password, admin["hashed_password"]):
+    # A deactivated account must be indistinguishable from a wrong password
+    # — same generic message either way, no separate "account disabled" hint.
+    if not admin or not admin["is_active"] or not _verify_password(payload.password, admin["hashed_password"]):
         raise HTTPException(401, "Ungültiger Benutzername oder Passwort")
-    return {"token": _create_admin_session(admin["username"]), "username": admin["username"]}
+
+    ticket = secrets.token_hex(32)
+    expires_at = (datetime.utcnow() + ADMIN_2FA_TICKET_TTL).isoformat()
+    db.create_admin_login_ticket(ticket, admin["username"], expires_at)
+
+    if admin["totp_confirmed_at"] is None:
+        # Reuse an already-generated-but-unconfirmed secret rather than
+        # minting a new one on every login attempt — otherwise an admin who
+        # scanned the first QR into their authenticator app and closed the
+        # tab before finishing would end up with an orphaned entry there.
+        secret = admin["totp_secret"] or pyotp.random_base32()
+        if not admin["totp_secret"]:
+            db.set_admin_totp_secret(admin["username"], secret)
+        uri = pyotp.TOTP(secret).provisioning_uri(name=admin["username"], issuer_name="Kinderkreis")
+        return {"pending_2fa": True, "mode": "enroll", "ticket": ticket, "otpauth_uri": uri, "secret": secret}
+
+    return {"pending_2fa": True, "mode": "verify", "ticket": ticket}
+
+
+@app.post("/api/admin/login/2fa")
+def admin_login_2fa(payload: AdminTwoFactorVerify):
+    ticket_row = db.get_admin_login_ticket(payload.ticket)
+    if not ticket_row or datetime.utcnow() > datetime.fromisoformat(ticket_row["expires_at"]):
+        if ticket_row:
+            db.delete_admin_login_ticket(payload.ticket)
+        raise HTTPException(401, "Anmeldevorgang abgelaufen. Bitte erneut anmelden.")
+
+    admin = db.get_admin(ticket_row["username"])
+    if not admin or not admin["is_active"] or not admin["totp_secret"]:
+        db.delete_admin_login_ticket(payload.ticket)
+        raise HTTPException(401, "Ungültiger Benutzername oder Passwort")
+
+    matched_step = _verify_totp_code(admin["totp_secret"], payload.code, admin["totp_last_step"])
+    if matched_step is None:
+        # Ticket is deliberately NOT deleted here (same as _validate_otp) —
+        # a mistyped code shouldn't force the admin back to square one
+        # within the ticket's still-valid window.
+        raise HTTPException(401, "Ungültiger oder bereits verwendeter Code")
+
+    db.set_admin_totp_last_step(admin["username"], matched_step)
+    if admin["totp_confirmed_at"] is None:
+        db.confirm_admin_totp(admin["username"], datetime.utcnow().isoformat())
+    db.delete_admin_login_ticket(payload.ticket)
+
+    return {
+        "token": _create_admin_session(admin["username"]),
+        "username": admin["username"],
+        "is_super_admin": admin["role"] == "super_admin",
+    }
 
 
 @app.post("/api/admin/logout")
@@ -530,6 +646,75 @@ def admin_unverify_certificate(provider_id: int, admin: dict = Depends(_current_
         raise HTTPException(404, "Provider nicht gefunden")
     db.set_certificate_verified(provider_id, False, None)
     return Provider(**db.get_provider(provider_id)).to_admin_dict()
+
+
+# ---------------------------------------------------------------------------
+# Admin management (super admin only) — create/reset/deactivate other admin
+# accounts. The super admin account itself can never be targeted through
+# these endpoints (there is exactly one, and the system must never end up
+# without a working admin account); it's managed only via ADMIN_USERNAME/
+# ADMIN_PASSWORD + a database reset, same as before this feature existed.
+# ---------------------------------------------------------------------------
+
+def _admin_public_dict(admin: dict) -> dict:
+    """Strips hashed_password/totp_secret — the super-admin panel needs to
+    know *whether* an admin has 2FA enrolled, never the secret itself."""
+    return {
+        "username": admin["username"],
+        "role": admin["role"],
+        "is_active": admin["is_active"],
+        "totp_enrolled": admin["totp_confirmed_at"] is not None,
+        "created_at": admin["created_at"],
+    }
+
+
+def _forbid_super_admin_target(username: str) -> dict:
+    target = db.get_admin(username)
+    if not target:
+        raise HTTPException(404, "Admin nicht gefunden")
+    if target["role"] == "super_admin":
+        raise HTTPException(400, "Der Super-Admin-Account kann nicht über dieses Panel verändert werden.")
+    return target
+
+
+@app.get("/api/admin/admins")
+def list_admin_accounts(super_admin: dict = Depends(_current_super_admin)):
+    return {"admins": [_admin_public_dict(a) for a in db.list_admins()]}
+
+
+@app.post("/api/admin/admins", status_code=201)
+def create_admin_account(payload: AdminCreateRequest, super_admin: dict = Depends(_current_super_admin)):
+    username = payload.username.strip()
+    if db.get_admin(username):
+        raise HTTPException(409, "Benutzername bereits vergeben")
+    db.create_admin(username, _hash_password(payload.password), datetime.utcnow().isoformat())
+    return _admin_public_dict(db.get_admin(username))
+
+
+@app.post("/api/admin/admins/{username}/reset-password")
+def reset_admin_password(
+    username: str, payload: AdminPasswordResetRequest, super_admin: dict = Depends(_current_super_admin)
+):
+    _forbid_super_admin_target(username)
+    db.set_admin_password(username, _hash_password(payload.new_password))
+    db.delete_admin_sessions_for_user(username)
+    return {"status": "ok"}
+
+
+@app.post("/api/admin/admins/{username}/reset-2fa")
+def reset_admin_totp(username: str, super_admin: dict = Depends(_current_super_admin)):
+    _forbid_super_admin_target(username)
+    db.clear_admin_totp(username)
+    db.delete_admin_sessions_for_user(username)
+    return {"status": "ok"}
+
+
+@app.post("/api/admin/admins/{username}/deactivate")
+def deactivate_admin_account(username: str, super_admin: dict = Depends(_current_super_admin)):
+    _forbid_super_admin_target(username)
+    db.deactivate_admin(username)
+    db.delete_admin_sessions_for_user(username)
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------

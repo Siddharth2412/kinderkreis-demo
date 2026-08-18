@@ -14,11 +14,20 @@ def _upload_certificate(client, token, content=PDF_BYTES):
 
 
 def test_admin_login_success(client):
+    """Step 1 (username/password) alone never returns a session — every
+    admin login requires TOTP 2FA. On a fresh DB this is the bootstrap
+    admin's very first login, so it lands on the "enroll" branch (a fresh
+    QR/secret to scan) rather than "verify". See test_admin_auth.py for the
+    full two-step flow through to a working session."""
     res = client.post("/api/admin/login", json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD})
     assert res.status_code == 200
     body = res.json()
-    assert body["username"] == ADMIN_USERNAME
-    assert body["token"]
+    assert body["pending_2fa"] is True
+    assert body["mode"] == "enroll"
+    assert body["ticket"]
+    assert body["otpauth_uri"]
+    assert body["secret"]
+    assert "token" not in body
 
 
 def test_admin_login_wrong_password_rejected(client):

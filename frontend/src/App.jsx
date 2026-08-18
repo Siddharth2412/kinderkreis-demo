@@ -10,6 +10,7 @@ import MyBookingsView from "./components/MyBookingsView.jsx";
 import ProviderBookingsView from "./components/ProviderBookingsView.jsx";
 import NotificationBell from "./components/NotificationBell.jsx";
 import AdminLoginView from "./components/AdminLoginView.jsx";
+import AdminTwoFactorView from "./components/AdminTwoFactorView.jsx";
 import AdminPanelView from "./components/AdminPanelView.jsx";
 import { logoutUser, adminLogout } from "./api.js";
 
@@ -43,6 +44,9 @@ export default function App() {
   const [auth, setAuth] = useState(loadAuth);
   const [pendingEmail, setPendingEmail] = useState("");
   const [adminAuth, setAdminAuth] = useState(loadAdminAuth);
+  // Result of step 1 (POST /api/admin/login) while step 2 (TOTP code) is
+  // still outstanding — never persisted, cleared on success or logout/nav.
+  const [pendingAdmin2fa, setPendingAdmin2fa] = useState(null);
 
   useEffect(() => {
     if (auth) {
@@ -80,16 +84,25 @@ export default function App() {
   // Logo / "Startseite": logged-in users land on the directory (as before);
   // logged-out visitors go back to the landing page, not straight into it.
   function goHome() {
+    setPendingAdmin2fa(null);
     setView(auth ? "home" : "landing");
   }
 
-  function handleAdminLogin(admin) {
+  // Step 1 (username/password) never returns a session by itself — every
+  // admin login requires TOTP 2FA next (see AdminTwoFactorView.jsx).
+  function handleAdminLogin(pending) {
+    setPendingAdmin2fa(pending);
+  }
+
+  function handleAdminTwoFactorVerified(admin) {
+    setPendingAdmin2fa(null);
     setAdminAuth(admin);
   }
 
   async function handleAdminLogout() {
     if (adminAuth) await adminLogout(adminAuth.token).catch(() => {});
     setAdminAuth(null);
+    setPendingAdmin2fa(null);
     setView("home");
   }
 
@@ -219,6 +232,12 @@ export default function App() {
         {showAdmin && (
           adminAuth ? (
             <AdminPanelView admin={adminAuth} onLogout={handleAdminLogout} />
+          ) : pendingAdmin2fa ? (
+            <AdminTwoFactorView
+              pending={pendingAdmin2fa}
+              onVerified={handleAdminTwoFactorVerified}
+              onCancel={() => setPendingAdmin2fa(null)}
+            />
           ) : (
             <AdminLoginView onLogin={handleAdminLogin} />
           )

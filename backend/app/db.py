@@ -95,6 +95,40 @@ def _migrate_bookings_table(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE bookings ADD COLUMN {name} {col_type}")
 
 
+def _migrate_admins_table(conn: sqlite3.Connection) -> None:
+    """Same ALTER TABLE approach as _migrate_bookings_table/_migrate_providers_table.
+
+    Adds the columns needed for real admin accounts + mandatory TOTP 2FA
+    (previously `admins` was just username/hashed_password, provisioned once
+    from ADMIN_USERNAME/ADMIN_PASSWORD — see seed_admin_if_empty)."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(admins)")}
+    new_columns = {
+        "role": "TEXT NOT NULL DEFAULT 'admin'",  # 'super_admin' | 'admin'
+        "totp_secret": "TEXT",  # base32; NULL until enrollment starts
+        "totp_confirmed_at": "TEXT",  # NULL == "not enrolled yet" — drives the login branch
+        "totp_last_step": "INTEGER",  # last consumed 30s TOTP step, for replay prevention
+        "is_active": "INTEGER NOT NULL DEFAULT 1",
+        "created_at": "TEXT",
+    }
+    for name, col_type in new_columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE admins ADD COLUMN {name} {col_type}")
+    # seed_admin_if_empty is the only INSERT into `admins` anywhere in this
+    # codebase, called once and only if the table is empty — so on any
+    # pre-existing database this table holds at most one row, and that row
+    # must become the (only) super admin. Guarded so it's a no-op once this
+    # has run — a fresh database's seeded row already gets role='super_admin'
+    # directly (see seed_admin_if_empty), so this UPDATE never matches there.
+    conn.execute(
+        """
+        UPDATE admins SET role = 'super_admin'
+        WHERE role = 'admin'
+          AND (SELECT COUNT(*) FROM admins) = 1
+          AND NOT EXISTS (SELECT 1 FROM admins WHERE role = 'super_admin')
+        """
+    )
+
+
 def _migrate_providers_table(conn: sqlite3.Connection) -> None:
     """Certificate columns added after `providers` already existed on someone's
     machine — same ALTER TABLE approach as _migrate_bookings_table. Kept out of
@@ -211,10 +245,20 @@ def init_db() -> None:
             )
             """
         )
+        _migrate_admins_table(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS admin_sessions (
                 token TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_login_tickets (
+                ticket TEXT PRIMARY KEY,
                 username TEXT NOT NULL,
                 expires_at TEXT NOT NULL
             )
@@ -613,31 +657,118 @@ def mark_all_notifications_read(recipient_email: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Admins — deliberately separate from `users`: username/password only, no
-# email/OTP/role, and its own session table (admin_sessions) so an admin
-# token can never be confused with (or reused as) an eltern/tagespflege one.
+# Admins — separate from `users`: own table, own session table
+# (admin_sessions) so an admin token can never be confused with (or reused
+# as) an eltern/tagespflege one. Exactly one row ever has role='super_admin'
+# (the bootstrap account seeded below); every other row is a regular admin
+# created via POST /api/admin/admins (see main.py). Every admin, including
+# the super admin, must complete TOTP enrollment (totp_confirmed_at) before
+# a login can ever succeed — see admin_login/admin_login_2fa in main.py.
 # ---------------------------------------------------------------------------
+
+_ADMIN_FIELDS = (
+    "username", "hashed_password", "role", "totp_secret", "totp_confirmed_at",
+    "totp_last_step", "is_active", "created_at",
+)
+
+
+def _row_to_admin_dict(row: sqlite3.Row) -> dict:
+    data = {field: row[field] for field in _ADMIN_FIELDS}
+    data["is_active"] = bool(data["is_active"])
+    return data
+
 
 def get_admin(username: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute("SELECT * FROM admins WHERE username = ?", (username,)).fetchone()
-    if not row:
-        return None
-    return {"username": row["username"], "hashed_password": row["hashed_password"]}
+    return _row_to_admin_dict(row) if row else None
 
 
-def seed_admin_if_empty(username: str, hashed_password: str) -> None:
-    """Creates the one admin account, but only the very first time the
-    admins table is empty — like seed_providers_if_empty, this never
-    overwrites credentials on later restarts, so changing ADMIN_USERNAME/
-    ADMIN_PASSWORD after the first run has no effect on an existing DB."""
+def list_admins() -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM admins ORDER BY created_at").fetchall()
+    return [_row_to_admin_dict(row) for row in rows]
+
+
+def seed_admin_if_empty(username: str, hashed_password: str, created_at: str) -> None:
+    """Creates the one bootstrap admin account — always as the sole super
+    admin — but only the very first time the admins table is empty, like
+    seed_providers_if_empty: this never overwrites credentials on later
+    restarts, so changing ADMIN_USERNAME/ADMIN_PASSWORD after the first run
+    has no effect on an existing DB. totp_secret/totp_confirmed_at are left
+    NULL on purpose — that's what makes this account's first login land on
+    the mandatory TOTP enrollment branch, same as any admin created later."""
     with _connect() as conn:
         count = conn.execute("SELECT COUNT(*) FROM admins").fetchone()[0]
         if count:
             return
         conn.execute(
-            "INSERT INTO admins (username, hashed_password) VALUES (?, ?)", (username, hashed_password)
+            """
+            INSERT INTO admins (username, hashed_password, role, is_active, created_at)
+            VALUES (?, ?, 'super_admin', 1, ?)
+            """,
+            (username, hashed_password, created_at),
         )
+
+
+def create_admin(username: str, hashed_password: str, created_at: str) -> None:
+    """Regular admin, created by the super admin (POST /api/admin/admins).
+    Raises sqlite3.IntegrityError on a duplicate username — main.py turns
+    that into a 409, same as create_my_provider's owner_email collision."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO admins (username, hashed_password, role, is_active, created_at)
+            VALUES (?, ?, 'admin', 1, ?)
+            """,
+            (username, hashed_password, created_at),
+        )
+
+
+def set_admin_password(username: str, hashed_password: str) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE admins SET hashed_password = ? WHERE username = ?", (hashed_password, username))
+
+
+def set_admin_totp_secret(username: str, secret: str) -> None:
+    """Persists a freshly generated, not-yet-confirmed secret mid-enrollment
+    — does NOT touch totp_confirmed_at/totp_last_step. See admin_login's
+    "reuse an already-generated secret" branch in main.py: an admin who
+    scanned a QR and closed the tab before finishing must see the same QR
+    again next login, not a new (orphaning) one."""
+    with _connect() as conn:
+        conn.execute("UPDATE admins SET totp_secret = ? WHERE username = ?", (secret, username))
+
+
+def confirm_admin_totp(username: str, confirmed_at: str) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE admins SET totp_confirmed_at = ? WHERE username = ?", (confirmed_at, username))
+
+
+def set_admin_totp_last_step(username: str, step: int) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE admins SET totp_last_step = ? WHERE username = ?", (step, username))
+
+
+def clear_admin_totp(username: str) -> None:
+    """Super-admin "reset 2FA" action: wipes all TOTP state so the target's
+    next login regenerates a brand-new secret and re-enrolls from scratch
+    (e.g. after they lost their authenticator device)."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE admins SET totp_secret = NULL, totp_confirmed_at = NULL, totp_last_step = NULL "
+            "WHERE username = ?",
+            (username,),
+        )
+
+
+def deactivate_admin(username: str) -> None:
+    """Soft-delete: keeps `username` uniquely reserved (can't be recreated
+    to dodge the deactivation) and avoids admin_sessions rows pointing at a
+    since-deleted account. Combine with delete_admin_sessions_for_user to
+    also kill any session the admin already had open."""
+    with _connect() as conn:
+        conn.execute("UPDATE admins SET is_active = 0 WHERE username = ?", (username,))
 
 
 def create_admin_session(token: str, username: str, expires_at: str) -> None:
@@ -659,3 +790,38 @@ def get_admin_session(token: str) -> Optional[dict]:
 def delete_admin_session(token: str) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM admin_sessions WHERE token = ?", (token,))
+
+
+def delete_admin_sessions_for_user(username: str) -> None:
+    """Bulk revoke — used by deactivate/reset-password/reset-2fa so an
+    already-open session can't keep working under invalidated credentials."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM admin_sessions WHERE username = ?", (username,))
+
+
+# ---------------------------------------------------------------------------
+# Admin login tickets — the "proof you passed step 1 (password)" handed to
+# step 2 (TOTP code) of admin_login/admin_login_2fa in main.py. Same shape as
+# sessions/admin_sessions (random token + DB row + expires_at), not a JWT —
+# no signing-key infra needed, and revocation is just deleting the row.
+# ---------------------------------------------------------------------------
+
+def create_admin_login_ticket(ticket: str, username: str, expires_at: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO admin_login_tickets (ticket, username, expires_at) VALUES (?, ?, ?)",
+            (ticket, username, expires_at),
+        )
+
+
+def get_admin_login_ticket(ticket: str) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM admin_login_tickets WHERE ticket = ?", (ticket,)).fetchone()
+    if not row:
+        return None
+    return {"ticket": row["ticket"], "username": row["username"], "expires_at": row["expires_at"]}
+
+
+def delete_admin_login_ticket(ticket: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM admin_login_tickets WHERE ticket = ?", (ticket,))

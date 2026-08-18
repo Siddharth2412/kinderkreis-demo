@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { adminLogin } from "../api.js";
 
-// Deliberately not the eltern/tagespflege login: plain username + password,
-// no email/OTP/role. Reached only via the footer "Admin" link, never the
-// main nav — see App.jsx.
+// Deliberately not the eltern/tagespflege login: separate username/password
+// form. Reached only via the footer "Admin" link, never the main nav — see
+// App.jsx. Step 1 only — a correct username/password never signs you in by
+// itself, it hands back a pending-2FA ticket that App.jsx routes into
+// AdminTwoFactorView (mandatory for every admin, no exceptions).
 export default function AdminLoginView({ onLogin }) {
   const [form, setForm] = useState({ username: "", password: "" });
   const [error, setError] = useState("");
